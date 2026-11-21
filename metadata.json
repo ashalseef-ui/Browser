@@ -1,0 +1,6 @@
+{
+  "name": "Volt Browser",
+  "description": "High-speed Android web browser with tracker shield, speculative preloading, and native Media3 video/audio playback, PiP, and media capture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

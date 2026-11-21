@@ -1,0 +1,480 @@
+package com.example.browser
+
+import android.net.Uri
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import com.example.data.DetectedMediaItem
+import com.example.data.MediaKind
+import java.net.URI
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+
+object MediaSniffer {
+
+  const val DEFAULT_BROWSER_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+
+  const val MIN_DOWNLOADABLE_VIDEO_BYTES = 1_048_576L // Strictly > 1 MB (1 MiB)
+
+  private val videoExtensions = setOf("mp4", "webm", "mkv", "mov", "m4v", "3gp", "avi", "flv")
+  private val audioExtensions = setOf("mp3", "aac", "m4a", "ogg", "opus", "flac", "wav")
+  private val playlistExtensions = setOf("m3u", "pls", "xspf")
+
+  fun classifyUrl(url: String, pageUrl: String, pageTitle: String): DetectedMediaItem? {
+    if (url.isBlank() || url.startsWith("data:") || url.startsWith("blob:")) return null
+    val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+    val scheme = parsed.scheme?.lowercase(Locale.US)
+    if (scheme != "http" && scheme != "https") return null
+
+    val pathLower = (parsed.path ?: "").lowercase(Locale.US)
+    val ext = pathLower.substringAfterLast('.', "")
+    val fullLower = url.lowercase(Locale.US)
+
+    // Skip individual HLS/DASH media chunks when master/media playlists are used
+    if (ext == "ts" || ext == "m4s") return null
+
+    val mimeParam = parsed.getQueryParameter("mime")?.lowercase(Locale.US).orEmpty()
+
+    val (kind, mime) =
+      when {
+        ext == "m3u8" || fullLower.contains(".m3u8") || mimeParam.contains("mpegurl") ->
+          MediaKind.STREAM_HLS to "application/x-mpegURL"
+        ext == "mpd" || fullLower.contains(".mpd") || mimeParam.contains("dash+xml") ->
+          MediaKind.STREAM_DASH to "application/dash+xml"
+        ext in playlistExtensions ->
+          MediaKind.PLAYLIST to
+            when (ext) {
+              "pls" -> "audio/x-scpls"
+              "xspf" -> "application/xspf+xml"
+              else -> "audio/x-mpegurl"
+            }
+        ext in videoExtensions || mimeParam.startsWith("video/") -> {
+          val resolvedExt = if (ext in videoExtensions && ext != "m4v") ext else "mp4"
+          MediaKind.VIDEO to "video/$resolvedExt"
+        }
+        ext in audioExtensions || mimeParam.startsWith("audio/") -> {
+          val resolvedExt = if (ext in audioExtensions) ext else "mpeg"
+          MediaKind.AUDIO to "audio/$resolvedExt"
+        }
+        else -> return null
+      }
+
+    val fileName =
+      parsed.lastPathSegment?.takeIf { it.isNotBlank() && it.length <= 72 && it.contains('.') }
+        ?: pageTitle.ifBlank { "Captured Video" }
+
+    return DetectedMediaItem(
+      url = url,
+      title = fileName,
+      kind = kind,
+      mimeType = mime,
+      sourcePageUrl = pageUrl,
+    )
+  }
+
+  data class VideoProbeResult(
+    val isDownloadable: Boolean,
+    val contentSizeBytes: Long? = null,
+    val mimeType: String? = null,
+    val resolvedUrl: String? = null,
+  )
+
+  fun getCookiesForUrl(url: String): String? =
+    runCatching { CookieManager.getInstance().getCookie(url) }
+      .getOrNull()
+      ?.takeIf { it.isNotBlank() }
+
+  fun buildBrowserRequestBuilder(url: String, referer: String? = null): Request.Builder {
+    val validReferer = referer?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    val builder =
+      Request.Builder()
+        .url(url)
+        .header("User-Agent", DEFAULT_BROWSER_USER_AGENT)
+        .header("Accept", "*/*")
+    if (validReferer != null) {
+      builder.header("Referer", validReferer)
+      runCatching {
+        val u = URI(validReferer)
+        if (!u.scheme.isNullOrBlank() && !u.authority.isNullOrBlank()) {
+          builder.header("Origin", "${u.scheme}://${u.authority}")
+        }
+      }
+    }
+    getCookiesForUrl(url)?.let { cookieHeader ->
+      builder.header("Cookie", cookieHeader)
+    }
+    return builder
+  }
+
+  fun isDownloadableVideoResponse(
+    httpCode: Int,
+    contentType: String?,
+    contentLength: Long?,
+    minBytes: Long = MIN_DOWNLOADABLE_VIDEO_BYTES,
+  ): Boolean {
+    if (httpCode !in 200..299) return false
+    val mimeLower = contentType?.substringBefore(';')?.trim()?.lowercase(Locale.US).orEmpty()
+    if (
+      mimeLower.startsWith("text/") ||
+        mimeLower.startsWith("image/") ||
+        mimeLower.startsWith("audio/") ||
+        mimeLower.contains("html") ||
+        mimeLower.contains("json") ||
+        mimeLower.contains("xml")
+    ) {
+      return false
+    }
+    // Enforce strict size check (> minBytes; default > 1 MB for full downloadable videos)
+    if (contentLength == null || contentLength <= minBytes) {
+      return false
+    }
+    return mimeLower.isEmpty() ||
+      mimeLower.startsWith("video/") ||
+      mimeLower == "application/octet-stream" ||
+      mimeLower == "binary/octet-stream" ||
+      mimeLower == "application/mp4"
+  }
+
+  /**
+   * Verifies that a remote URL resolves cleanly (following redirects, carrying cookies & Referer/Origin),
+   * points to a downloadable binary video resource (HTTP 2xx, non-HTML/audio/error), and exceeds [minBytes]
+   * (strictly > 1 MB by default for listed videos).
+   */
+  suspend fun probeDownloadableVideo(
+    okHttpClient: OkHttpClient,
+    url: String,
+    referer: String? = null,
+    minBytes: Long = MIN_DOWNLOADABLE_VIDEO_BYTES,
+  ): VideoProbeResult =
+    withContext(Dispatchers.IO) {
+      val headProbe =
+        runCatching {
+          val req = buildBrowserRequestBuilder(url, referer).head().build()
+          okHttpClient.newCall(req).execute().use { response ->
+            val len = response.header("Content-Length")?.toLongOrNull()?.takeIf { it > 0L }
+            val mime = response.header("Content-Type")?.substringBefore(';')?.trim()
+            val finalUrl = response.request.url.toString()
+            if (response.isSuccessful) {
+              val ok = isDownloadableVideoResponse(response.code, mime, len, minBytes)
+              VideoProbeResult(
+                isDownloadable = ok,
+                contentSizeBytes = len,
+                mimeType = mime,
+                resolvedUrl = finalUrl,
+              )
+            } else {
+              null
+            }
+          }
+        }.getOrNull()
+
+      if (headProbe != null) {
+        if (headProbe.isDownloadable) return@withContext headProbe
+        // If HEAD returned a small known size (<= minBytes) or HTML error page on 200 OK, reject immediately
+        val headMime = headProbe.mimeType?.lowercase(Locale.US).orEmpty()
+        if (headMime.contains("html") || (headProbe.contentSizeBytes != null && headProbe.contentSizeBytes <= minBytes)) {
+          return@withContext headProbe
+        }
+      }
+
+      // Lightweight 1-byte range GET request to follow redirects, read exact Content-Range total size & verify video MIME
+      runCatching {
+        val req =
+          buildBrowserRequestBuilder(url, referer)
+            .header("Range", "bytes=0-0")
+            .get()
+            .build()
+        okHttpClient.newCall(req).execute().use { response ->
+          val mime = response.header("Content-Type")?.substringBefore(';')?.trim()
+          val finalUrl = response.request.url.toString()
+          val contentRange = response.header("Content-Range")
+          val totalFromRange = parseTotalSizeFromContentRange(contentRange)
+          val len =
+            totalFromRange
+              ?: if (response.code == 200) {
+                response.header("Content-Length")?.toLongOrNull()?.takeIf { it > 0L }
+              } else {
+                null
+              }
+          val ok = isDownloadableVideoResponse(response.code, mime, len, minBytes)
+          VideoProbeResult(
+            isDownloadable = ok,
+            contentSizeBytes = len,
+            mimeType = mime,
+            resolvedUrl = finalUrl,
+          )
+        }
+      }.getOrElse {
+        headProbe ?: VideoProbeResult(isDownloadable = false)
+      }
+    }
+
+  /**
+   * Queries exact remote file size via HTTP HEAD, with a lightweight Range: bytes=0-0 GET fallback
+   * for CDNs/servers that block HEAD or omit Content-Length on HEAD.
+   */
+  suspend fun probeContentSize(
+    okHttpClient: OkHttpClient,
+    url: String,
+    referer: String? = null,
+  ): Long? = probeDownloadableVideo(okHttpClient, url, referer, minBytes = 0L).contentSizeBytes
+
+  fun parseTotalSizeFromContentRange(contentRange: String?): Long? {
+    if (contentRange.isNullOrBlank()) return null
+    val totalPart = contentRange.substringAfter('/', "").trim()
+    if (totalPart.isEmpty() || totalPart == "*") return null
+    return totalPart.toLongOrNull()?.takeIf { it > 0L }
+  }
+
+  val domSnifferScript: String =
+    """
+    (function() {
+      function classifySrc(src) {
+        var low = (src || '').toLowerCase();
+        if (low.indexOf('.m3u8') !== -1) return 'STREAM_HLS';
+        if (low.indexOf('.mpd') !== -1) return 'STREAM_DASH';
+        if (low.indexOf('.m3u') !== -1 || low.indexOf('.pls') !== -1 || low.indexOf('.xspf') !== -1) return 'PLAYLIST';
+        if (low.indexOf('.mp3') !== -1 || low.indexOf('.m4a') !== -1 || low.indexOf('.aac') !== -1 || low.indexOf('.ogg') !== -1 || low.indexOf('.opus') !== -1 || low.indexOf('.flac') !== -1) return 'AUDIO';
+        return 'VIDEO';
+      }
+
+      function isMediaLink(href) {
+        var low = (href || '').toLowerCase().split('?')[0].split('#')[0];
+        return /\.(mp4|webm|mkv|mov|m4v|3gp|avi|flv|m3u8|mpd|m3u|pls|xspf)$/.test(low);
+      }
+
+      function resolveAbsolute(raw, baseUri) {
+        if (!raw) return '';
+        try { return new URL(raw, baseUri || location.href).href; } catch (e) { return raw; }
+      }
+
+      function addCandidate(out, seen, rawUrl, baseUri, title, poster, duration) {
+        var url = resolveAbsolute(rawUrl, baseUri);
+        if (!url || url.startsWith('blob:') || url.startsWith('data:')) return;
+        if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+        var kind = classifySrc(url);
+        if (kind === 'AUDIO') return;
+        if (seen[url]) return;
+        seen[url] = true;
+        out.push({
+          url: url,
+          kind: kind,
+          title: title || 'Web Video',
+          poster: poster || '',
+          duration: duration || 0
+        });
+      }
+
+      function scanDoc(doc, out, seen, baseTitle) {
+        try {
+          var baseUri = doc.baseURI || location.href;
+          var videos = doc.querySelectorAll('video');
+          videos.forEach(function(v, idx) {
+            var candidates = [
+              v.currentSrc, v.src,
+              v.getAttribute('data-src'), v.getAttribute('data-mp4'),
+              v.getAttribute('data-video'), v.getAttribute('data-hls'),
+              v.getAttribute('data-stream'), v.getAttribute('data-url')
+            ];
+            v.querySelectorAll('source').forEach(function(s) {
+              candidates.push(s.src, s.getAttribute('src'), s.getAttribute('data-src'));
+            });
+            var setup = v.getAttribute('data-setup');
+            if (setup) {
+              try {
+                var parsed = JSON.parse(setup);
+                if (parsed && Array.isArray(parsed.sources)) {
+                  parsed.sources.forEach(function(srcObj) { if (srcObj && srcObj.src) candidates.push(srcObj.src); });
+                }
+              } catch (e) {}
+            }
+            var dur = isFinite(v.duration) ? Math.floor(v.duration) : 0;
+            candidates.forEach(function(src) {
+              addCandidate(out, seen, src, baseUri, baseTitle + (videos.length > 1 ? ' #' + (idx + 1) : ''), v.poster || '', dur);
+            });
+          });
+
+          doc.querySelectorAll('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"]').forEach(function(m) {
+            if (m && m.content) {
+              addCandidate(out, seen, m.content, baseUri, baseTitle, '', 0);
+            }
+          });
+
+          doc.querySelectorAll('[data-mp4], [data-video], [data-stream], [data-file], [data-hls], [data-video-url]').forEach(function(el) {
+            ['data-mp4', 'data-video', 'data-stream', 'data-file', 'data-hls', 'data-video-url'].forEach(function(attr) {
+              var val = el.getAttribute(attr);
+              if (val) {
+                addCandidate(out, seen, val, baseUri, baseTitle, '', 0);
+              }
+            });
+          });
+
+          doc.querySelectorAll('a[href]').forEach(function(a) {
+            var href = a.href;
+            if (href && isMediaLink(href)) {
+              var linkTitle = (a.innerText || a.title || '').trim();
+              addCandidate(out, seen, href, baseUri, linkTitle || baseTitle, '', 0);
+            }
+          });
+
+          // Scan JSON-LD VideoObject & inline script/JSON blocks for direct .mp4, .webm, .m3u8, or .mpd URLs
+          var urlPattern = /https?:\/\/[^"'\s<>\\]+\.(?:mp4|webm|mkv|mov|m4v|m3u8|mpd)(?:\?[^"'\s<>\\]*)?/gi;
+          doc.querySelectorAll('script:not([src])').forEach(function(sc) {
+            var txt = sc.textContent || '';
+            if (txt.length > 0 && txt.length < 300000) {
+              if ((sc.type || '').indexOf('ld+json') !== -1) {
+                try {
+                  var ld = JSON.parse(txt);
+                  var arr = Array.isArray(ld) ? ld : [ld];
+                  arr.forEach(function(entry) {
+                    if (entry && entry.contentUrl) addCandidate(out, seen, entry.contentUrl, baseUri, entry.name || baseTitle, entry.thumbnailUrl || '', 0);
+                  });
+                } catch (e) {}
+              }
+              var clean = txt.replace(/\\\//g, '/').replace(/\\u002F/gi, '/').replace(/\\u0026/gi, '&');
+              var m;
+              while ((m = urlPattern.exec(clean)) !== null) {
+                addCandidate(out, seen, m[0], baseUri, baseTitle, '', 0);
+              }
+            }
+          });
+        } catch (e) {}
+      }
+
+      function emitDynamicUrl(url) {
+        try {
+          if (!url || typeof url !== 'string') return;
+          var abs = resolveAbsolute(url, location.href);
+          if (isMediaLink(abs) && window.VoltMediaBridge) {
+            var kind = classifySrc(abs);
+            if (kind !== 'AUDIO') {
+              window.VoltMediaBridge.onMediaFound(JSON.stringify([{
+                url: abs,
+                kind: kind,
+                title: document.title || location.hostname || 'Web Video',
+                poster: '',
+                duration: 0
+              }]));
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (!window.__voltNetworkHooked) {
+        window.__voltNetworkHooked = true;
+        try {
+          var origFetch = window.fetch;
+          if (origFetch) {
+            window.fetch = function(input) {
+              try {
+                var u = typeof input === 'string' ? input : (input && input.url);
+                emitDynamicUrl(u);
+              } catch (e) {}
+              return origFetch.apply(this, arguments);
+            };
+          }
+          var origOpen = XMLHttpRequest.prototype.open;
+          if (origOpen) {
+            XMLHttpRequest.prototype.open = function(method, url) {
+              try { emitDynamicUrl(url); } catch (e) {}
+              return origOpen.apply(this, arguments);
+            };
+          }
+        } catch (e) {}
+      }
+
+      window.__voltScanMedia = function() {
+        try {
+          var found = [];
+          var seen = {};
+          var pageTitle = document.title || location.hostname || 'Web Video';
+          scanDoc(document, found, seen, pageTitle);
+          var frames = document.querySelectorAll('iframe');
+          frames.forEach(function(f) {
+            try {
+              if (f.contentDocument) scanDoc(f.contentDocument, found, seen, pageTitle);
+            } catch (e) {}
+          });
+          if (found.length > 0 && window.VoltMediaBridge) {
+            window.VoltMediaBridge.onMediaFound(JSON.stringify(found));
+          }
+        } catch (e) {}
+      };
+
+      if (!window.__voltSnifferActive) {
+        window.__voltSnifferActive = true;
+        document.addEventListener('play', window.__voltScanMedia, true);
+        document.addEventListener('loadedmetadata', window.__voltScanMedia, true);
+        if (window.MutationObserver && document.body) {
+          var obs = new MutationObserver(function() {
+            clearTimeout(window.__voltDebounce);
+            window.__voltDebounce = setTimeout(window.__voltScanMedia, 600);
+          });
+          obs.observe(document.body, { childList: true, subtree: true });
+        }
+      }
+      window.__voltScanMedia();
+      setTimeout(window.__voltScanMedia, 1000);
+    })();
+    """
+      .trimIndent()
+}
+
+class VoltMediaJsBridge(
+  private val onDetected: (List<DetectedMediaItem>) -> Unit,
+  private val currentPageUrlProvider: () -> String,
+) {
+  @JavascriptInterface
+  fun onMediaFound(jsonPayload: String) {
+    runCatching {
+      val array = JSONArray(jsonPayload)
+      val pageUrl = currentPageUrlProvider()
+      val items = buildList {
+        for (i in 0 until array.length()) {
+          val obj = array.optJSONObject(i) ?: continue
+          val url = obj.optString("url")
+          if (url.isBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+            continue
+          }
+          val kindStr = obj.optString("kind", "VIDEO")
+          val kind =
+            when (kindStr) {
+              "AUDIO" -> MediaKind.AUDIO
+              "STREAM_HLS" -> MediaKind.STREAM_HLS
+              "STREAM_DASH" -> MediaKind.STREAM_DASH
+              "PLAYLIST" -> MediaKind.PLAYLIST
+              else -> MediaKind.VIDEO
+            }
+          val mime =
+            when (kind) {
+              MediaKind.AUDIO -> "audio/mpeg"
+              MediaKind.STREAM_HLS -> "application/x-mpegURL"
+              MediaKind.STREAM_DASH -> "application/dash+xml"
+              MediaKind.PLAYLIST -> "audio/x-mpegurl"
+              MediaKind.VIDEO -> "video/mp4"
+            }
+          val duration = obj.optLong("duration", 0L).takeIf { it > 0L }
+          val poster = obj.optString("poster").takeIf { it.isNotBlank() }
+          add(
+            DetectedMediaItem(
+              url = url,
+              title = obj.optString("title").ifBlank { "Web Video" },
+              kind = kind,
+              mimeType = mime,
+              sourcePageUrl = pageUrl,
+              posterUrl = poster,
+              durationSeconds = duration,
+            )
+          )
+        }
+      }
+      if (items.isNotEmpty()) {
+        onDetected(items)
+      }
+    }
+  }
+}
