@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import com.example.data.AppThemeMode
+import com.example.data.SearchEngine
 
 // Cyber Obsidian Dark Palette
 val VoltCyan = Color(0xFF00E5FF)
@@ -76,3 +77,11 @@ val ZenLightExtendedColors =
   )
 
 val LocalVoltColors = staticCompositionLocalOf { DarkVoltExtendedColors }
+
+fun SearchEngine.badgeAccentColor(isLightTheme: Boolean): Color =
+  when {
+    this == SearchEngine.WIKIPEDIA && isLightTheme -> Color(0xFF475569)
+    this == SearchEngine.KAGI && isLightTheme -> Color(0xFFD97706)
+    this == SearchEngine.MARGINALIA && isLightTheme -> Color(0xFFD97706)
+    else -> Color(accentColorHex)
+  }

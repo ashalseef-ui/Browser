@@ -14,7 +14,11 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.Uri
+import android.os.Bundle
 import android.view.HapticFeedbackConstants
+import androidx.webkit.ProfileStore
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.example.data.AdBlockerType
 import com.example.data.BrowserSettings
 import com.example.data.DetectedMediaItem
@@ -54,6 +58,8 @@ class WebViewTabPool(
   )
 
   private val webViews = LinkedHashMap<String, WebView>(8, 0.75f, true)
+  private val savedStateBundles = HashMap<String, Bundle>()
+  private val incognitoTabIds = HashSet<String>()
   private val appliedWebSettings = HashMap<String, AppliedWebSettings>()
   private val pageStartTimestamps = HashMap<String, Long>()
   private val currentUrls = HashMap<String, String>()
@@ -61,6 +67,7 @@ class WebViewTabPool(
   private val lastDomTouchTargets = ConcurrentHashMap<String, Pair<Long, WebContextMenuTarget>>()
 
   @Volatile var currentSettings: BrowserSettings = BrowserSettings()
+  var proxyAuthTargetProvider: (() -> VoltSpeedEngine.ProxyAuthTarget?)? = null
   var proxyCredentialsProvider: (() -> Pair<String, String>?)? = null
 
   private fun BrowserSettings.toAppliedWebSettings(): AppliedWebSettings =
@@ -74,6 +81,7 @@ class WebViewTabPool(
     tabId: String,
     isIncognito: Boolean,
     callbacks: TabWebCallbacks,
+    fallbackUrl: String? = null,
   ): WebView {
     webViews[tabId]?.let { existing ->
       val target = currentSettings.toAppliedWebSettings()
@@ -84,6 +92,10 @@ class WebViewTabPool(
       return existing
     }
 
+    if (webViews.size >= MAX_LIVE_WEBVIEWS) {
+      evictEldestWebView(excludingTabId = tabId)
+    }
+
     val webView = WebView(context)
     webView.layoutParams =
       ViewGroup.LayoutParams(
@@ -92,7 +104,19 @@ class WebViewTabPool(
       )
 
     if (isIncognito) {
-      CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+      incognitoTabIds.add(tabId)
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+        runCatching {
+          WebViewCompat.setProfile(webView, PRIVATE_PROFILE_NAME)
+          val profile = ProfileStore.getInstance().getOrCreateProfile(PRIVATE_PROFILE_NAME)
+          profile.cookieManager.setAcceptCookie(true)
+          profile.cookieManager.setAcceptThirdPartyCookies(webView, false)
+        }.onFailure {
+          CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+        }
+      } else {
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+      }
     } else {
       CookieManager.getInstance().setAcceptCookie(true)
       CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -246,9 +270,9 @@ class WebViewTabPool(
           host: String?,
           realm: String?,
         ) {
-          val creds = proxyCredentialsProvider?.invoke()
-          if (creds != null && handler != null) {
-            handler.proceed(creds.first, creds.second)
+          val authTarget = proxyAuthTargetProvider?.invoke() ?: speedEngine.getActiveProxyAuthTarget()
+          if (authTarget != null && handler != null && shouldProvideProxyCredentials(host, authTarget.host)) {
+            handler.proceed(authTarget.username, authTarget.password)
           } else {
             super.onReceivedHttpAuthRequest(view, handler, host, realm)
           }
@@ -308,8 +332,9 @@ class WebViewTabPool(
         if (rawUrl.startsWith("blob:", ignoreCase = true)) {
           val js =
             """
-            (function(bUrl, dispName, mime) {
+            (function(bUrl, dispName, mime, maxBytes) {
               fetch(bUrl).then(function(r) { return r.blob(); }).then(function(blob) {
+                if (blob.size > maxBytes) { return; }
                 var reader = new FileReader();
                 reader.onloadend = function() {
                   if (reader.result && window.VoltMediaBridge && window.VoltMediaBridge.onBlobDownloadData) {
@@ -318,7 +343,7 @@ class WebViewTabPool(
                 };
                 reader.readAsDataURL(blob);
               }).catch(function() {});
-            })(${JSONObject.quote(rawUrl)}, ${JSONObject.quote(contentDisposition.orEmpty())}, ${JSONObject.quote(mimetype.orEmpty())});
+            })(${JSONObject.quote(rawUrl)}, ${JSONObject.quote(contentDisposition.orEmpty())}, ${JSONObject.quote(mimetype.orEmpty())}, $MAX_BLOB_DOWNLOAD_BYTES);
             """.trimIndent()
           webView.evaluateJavascript(js, null)
         } else {
@@ -361,7 +386,36 @@ class WebViewTabPool(
 
     webViews[tabId] = webView
     appliedWebSettings[tabId] = currentSettings.toAppliedWebSettings()
+
+    val savedBundle = savedStateBundles.remove(tabId)
+    val restored = if (savedBundle != null) webView.restoreState(savedBundle) != null else false
+    if (!restored && !fallbackUrl.isNullOrBlank()) {
+      webView.loadUrl(fallbackUrl)
+    }
     return webView
+  }
+
+  private fun evictEldestWebView(excludingTabId: String) {
+    val eldestEntry = webViews.entries.firstOrNull { it.key != excludingTabId } ?: return
+    val evictId = eldestEntry.key
+    val wv = webViews.remove(evictId) ?: return
+    val stateBundle = Bundle()
+    val saved =
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.SAVE_STATE)) {
+        runCatching { WebViewCompat.saveState(wv, stateBundle, MAX_SAVED_STATE_BYTES, false) }.isSuccess
+      } else {
+        wv.saveState(stateBundle) != null
+      }
+    if (saved && !stateBundle.isEmpty) {
+      savedStateBundles[evictId] = stateBundle
+    }
+    (wv.parent as? ViewGroup)?.removeView(wv)
+    wv.stopLoading()
+    speedEngine.wipeEphemeralCacheAndStorage(wv, wipeGlobalProfileStorage = false)
+    wv.removeAllViews()
+    wv.destroy()
+    appliedWebSettings.remove(evictId)
+    pageStartTimestamps.remove(evictId)
   }
 
   fun findWebView(tabId: String): WebView? = webViews[tabId]
@@ -394,20 +448,37 @@ class WebViewTabPool(
     }
   }
 
-  fun wipeAllCacheAndCookies() {
-    webViews.values.forEach { speedEngine.wipeEphemeralCacheAndStorage(it) }
-    if (webViews.isEmpty()) {
-      speedEngine.wipeEphemeralCacheAndStorage(null)
+  private fun wipePrivateProfileStorage() {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+      runCatching {
+        val profile = ProfileStore.getInstance().getOrCreateProfile(PRIVATE_PROFILE_NAME)
+        profile.cookieManager.removeAllCookies(null)
+        profile.cookieManager.removeSessionCookies(null)
+        profile.cookieManager.flush()
+        profile.webStorage.deleteAllData()
+      }
     }
   }
 
+  fun wipeAllCacheAndCookies() {
+    savedStateBundles.clear()
+    webViews.values.forEach { speedEngine.wipeEphemeralCacheAndStorage(it, wipeGlobalProfileStorage = false) }
+    wipePrivateProfileStorage()
+    speedEngine.wipeEphemeralCacheAndStorage(null, wipeGlobalProfileStorage = true)
+  }
+
   fun destroyTab(tabId: String) {
+    savedStateBundles.remove(tabId)
+    val wasIncognito = incognitoTabIds.remove(tabId)
     webViews.remove(tabId)?.let { wv ->
       (wv.parent as? ViewGroup)?.removeView(wv)
       wv.stopLoading()
-      speedEngine.wipeEphemeralCacheAndStorage(wv)
+      speedEngine.wipeEphemeralCacheAndStorage(wv, wipeGlobalProfileStorage = false)
       wv.removeAllViews()
       wv.destroy()
+    }
+    if (wasIncognito && incognitoTabIds.isEmpty()) {
+      wipePrivateProfileStorage()
     }
     appliedWebSettings.remove(tabId)
     pageStartTimestamps.remove(tabId)
@@ -419,6 +490,8 @@ class WebViewTabPool(
   fun destroyAllTabs() {
     val ids = webViews.keys.toList()
     ids.forEach { destroyTab(it) }
+    savedStateBundles.clear()
+    incognitoTabIds.clear()
     wipeAllCacheAndCookies()
     appliedWebSettings.clear()
     pageStartTimestamps.clear()
@@ -456,6 +529,17 @@ class WebViewTabPool(
   }
 
   companion object {
+    const val MAX_LIVE_WEBVIEWS = 5
+    const val PRIVATE_PROFILE_NAME = "volt_private"
+    const val MAX_SAVED_STATE_BYTES = 256 * 1024
+    const val MAX_BLOB_DOWNLOAD_BYTES = 25 * 1024 * 1024
+
+    fun shouldProvideProxyCredentials(challengeHost: String?, activeProxyHost: String?): Boolean {
+      val challenge = challengeHost?.trim().orEmpty()
+      val proxy = activeProxyHost?.trim().orEmpty()
+      return challenge.isNotEmpty() && proxy.isNotEmpty() && challenge.equals(proxy, ignoreCase = true)
+    }
+
     fun resolveContextTarget(
       pageUrl: String,
       hitType: Int,

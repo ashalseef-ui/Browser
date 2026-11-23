@@ -12,12 +12,12 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.VoltBrowserApp
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.net.SocketFactory
 import kotlinx.coroutines.CoroutineScope
@@ -28,11 +28,14 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -59,8 +62,13 @@ class VoltVpnService : VpnService() {
   private var tunnelJob: Job? = null
   private var currentProvider: DohProvider = DohProvider.CLOUDFLARE
 
-  // Strictly ephemeral in-memory DNS cache (wiped on disconnect/destroy, never written to disk)
-  private val dnsCache = ConcurrentHashMap<String, CachedDnsEntry>()
+  // Strictly ephemeral in-memory LRU DNS cache (wiped on disconnect/destroy, never written to disk)
+  private val dnsCacheLock = Any()
+  private val dnsCache =
+    object : LinkedHashMap<String, CachedDnsEntry>(256, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedDnsEntry>?): Boolean =
+        size > 256
+    }
   private val dnsConcurrencyLimiter = Semaphore(32)
 
   private val protectedSocketFactory =
@@ -120,11 +128,25 @@ class VoltVpnService : VpnService() {
       return START_NOT_STICKY
     }
 
+    if (intent == null && prepare(this) != null) {
+      stopTunnel()
+      stopSelf()
+      return START_NOT_STICKY
+    }
+
     val providerName = intent?.getStringExtra(EXTRA_DOH_PROVIDER)
     currentProvider =
-      DohProvider.entries.firstOrNull { it.name == providerName } ?: DohProvider.CLOUDFLARE
+      if (providerName != null) {
+        DohProvider.entries.firstOrNull { it.name == providerName } ?: DohProvider.CLOUDFLARE
+      } else {
+        runBlocking {
+          withTimeoutOrNull(1000L) {
+            (application as? VoltBrowserApp)?.repository?.settings?.first()?.preferredDohProvider
+          }
+        } ?: DohProvider.CLOUDFLARE
+      }
 
-    dnsCache.clear()
+    clearDnsCache()
     startForegroundNotification()
     startTunnel()
     return START_STICKY
@@ -161,7 +183,7 @@ class VoltVpnService : VpnService() {
 
     val notification: Notification =
       NotificationCompat.Builder(this, channelId)
-        .setSmallIcon(R.drawable.ic_launcher_foreground)
+        .setSmallIcon(R.drawable.ic_volt_stat)
         .setContentTitle("Volt Encrypted VPN Active")
         .setContentText("DNS encrypted via ${currentProvider.displayName}")
         .setOngoing(true)
@@ -197,6 +219,7 @@ class VoltVpnService : VpnService() {
       _runtimeStats.update {
         it.copy(isRunning = false, errorMessage = "VPN interface could not be established")
       }
+      runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
       stopSelf()
       return
     }
@@ -247,18 +270,16 @@ class VoltVpnService : VpnService() {
   }
 
   private fun resolveDnsWithCacheAndFailover(dnsQuery: ByteArray): ByteArray? {
-    val cacheKey = extractCacheKey(dnsQuery)
+    val cacheKey = DnsPacketCodec.extractNormalizedQuestionKey(dnsQuery)
     val now = System.currentTimeMillis()
     if (cacheKey != null) {
-      val cached = dnsCache[cacheKey]
-      if (cached != null && now < cached.expiresAtMs && cached.responseBytes.size >= 2 && dnsQuery.size >= 2) {
+      val cached = getCachedDns(cacheKey, now)
+      if (cached != null && cached.responseBytes.size >= 2 && dnsQuery.size >= 2) {
         val cloned = cached.responseBytes.copyOf()
         // Stamp incoming 16-bit DNS transaction ID onto cached response
         cloned[0] = dnsQuery[0]
         cloned[1] = dnsQuery[1]
         return cloned
-      } else if (cached != null && now >= cached.expiresAtMs) {
-        dnsCache.remove(cacheKey)
       }
     }
 
@@ -272,19 +293,34 @@ class VoltVpnService : VpnService() {
         forwardDnsOverHttps(fallbackProvider.endpointUrl, dnsQuery)
       }
 
-    if (resolved != null && cacheKey != null) {
-      if (dnsCache.size > 256) {
-        dnsCache.clear()
-      }
-      dnsCache[cacheKey] = CachedDnsEntry(resolved.copyOf(), now + 45_000L)
+    if (resolved != null && cacheKey != null && DnsPacketCodec.extractRcode(resolved) == 0) {
+      val ttlMs = (DnsPacketCodec.extractMinAnswerTtlSeconds(resolved) ?: 30L) * 1000L
+      putCachedDns(cacheKey, CachedDnsEntry(resolved.copyOf(), now + ttlMs))
     }
     return resolved
   }
 
-  private fun extractCacheKey(dnsQuery: ByteArray): String? {
-    // DNS header is 12 bytes; skip txId (0..1) and flags/counts (2..11), hash question section
-    if (dnsQuery.size <= 12) return null
-    return dnsQuery.copyOfRange(12, dnsQuery.size).contentHashCode().toString()
+  private fun getCachedDns(key: String, nowMs: Long): CachedDnsEntry? =
+    synchronized(dnsCacheLock) {
+      val entry = dnsCache[key] ?: return null
+      if (nowMs >= entry.expiresAtMs) {
+        dnsCache.remove(key)
+        null
+      } else {
+        entry
+      }
+    }
+
+  private fun putCachedDns(key: String, entry: CachedDnsEntry) {
+    synchronized(dnsCacheLock) {
+      dnsCache[key] = entry
+    }
+  }
+
+  private fun clearDnsCache() {
+    synchronized(dnsCacheLock) {
+      dnsCache.clear()
+    }
   }
 
   private fun forwardDnsOverHttps(endpointUrl: String, dnsQuery: ByteArray): ByteArray? {
@@ -306,9 +342,10 @@ class VoltVpnService : VpnService() {
   private fun stopTunnel() {
     tunnelJob?.cancel()
     tunnelJob = null
-    dnsCache.clear()
+    clearDnsCache()
     runCatching { tunInterface?.close() }
     tunInterface = null
+    runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
     _runtimeStats.update { it.copy(isRunning = false) }
   }
 

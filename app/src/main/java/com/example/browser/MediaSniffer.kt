@@ -323,9 +323,13 @@ object MediaSniffer {
           });
 
           // Scan JSON-LD VideoObject & inline script/JSON blocks for direct .mp4, .webm, .m3u8, or .mpd URLs
+          var scannedScripts = window.__voltScannedScripts || (window.WeakSet ? new WeakSet() : null);
+          window.__voltScannedScripts = scannedScripts;
           var urlPattern = /https?:\/\/[^"'\s<>\\]+\.(?:mp4|webm|mkv|mov|m4v|m3u8|mpd)(?:\?[^"'\s<>\\]*)?/gi;
           doc.querySelectorAll('script:not([src])').forEach(function(sc) {
+            if (scannedScripts && scannedScripts.has(sc)) return;
             var txt = sc.textContent || '';
+            if (scannedScripts && txt.length > 0) scannedScripts.add(sc);
             if (txt.length > 0 && txt.length < 300000) {
               if ((sc.type || '').indexOf('ld+json') !== -1) {
                 try {
@@ -421,6 +425,7 @@ object MediaSniffer {
 
       if (!window.__voltContextTouchHooked) {
         window.__voltContextTouchHooked = true;
+        window.__voltHadTouchTarget = false;
         function inspectTouchContext(target, clientX, clientY) {
           try {
             var linkUrl = '', linkText = '', imageUrl = '', mediaUrl = '', mediaTitle = '';
@@ -456,6 +461,9 @@ object MediaSniffer {
                 if (!imageUrl && el.poster) imageUrl = el.poster;
               }
             }
+            var hasTarget = !!(linkUrl || imageUrl || mediaUrl);
+            if (!hasTarget && !window.__voltHadTouchTarget) return;
+            window.__voltHadTouchTarget = hasTarget;
             if (window.VoltMediaBridge && window.VoltMediaBridge.onTouchTargetDetected) {
               window.VoltMediaBridge.onTouchTargetDetected(JSON.stringify({
                 linkUrl: linkUrl || '',
@@ -503,7 +511,7 @@ class VoltMediaJsBridge(
 
   @JavascriptInterface
   fun onBlobDownloadData(dataUrl: String, suggestedName: String, mimeType: String) {
-    if (dataUrl.startsWith("data:", ignoreCase = true)) {
+    if (dataUrl.startsWith("data:", ignoreCase = true) && dataUrl.length <= 36_000_000) {
       onBlobDownloaded(dataUrl, suggestedName, mimeType)
     }
   }

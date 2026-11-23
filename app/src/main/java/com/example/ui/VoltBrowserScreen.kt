@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,6 +57,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -227,21 +229,87 @@ fun VoltBrowserScreen(
     }
   }
 
-  Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-    Scaffold(
-      snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-      containerColor = MaterialTheme.colorScheme.background,
-    ) { _ ->
-      BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isWideScreen = maxWidth >= 600.dp
+  BoxWithConstraints(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    val isWideScreen = maxWidth >= 600.dp
+    val showPhoneBottomDock = !isWideScreen && !isInPipMode && !isBrowserFullscreen
+    val showMiniPlayerInBar = mediaState.isVisible && mediaState.isMinimized && !isInPipMode && !isBrowserFullscreen
+    val bottomBarConsumesNavInset = showPhoneBottomDock || showMiniPlayerInBar
 
-        Row(modifier = Modifier.fillMaxSize()) {
-          // Adaptive Tablet / Foldable NavigationRail (hidden in fullscreen or PiP)
-          if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
-            NavigationRail(
-              containerColor = MaterialTheme.colorScheme.surface,
-              modifier = Modifier.statusBarsPadding().navigationBarsPadding(),
-            ) {
+    Scaffold(
+      contentWindowInsets = WindowInsets(0, 0, 0, 0),
+      snackbarHost = {
+        SnackbarHost(
+          hostState = snackbarHostState,
+          modifier =
+            if (!bottomBarConsumesNavInset && !isAnyFullscreen) {
+              Modifier.navigationBarsPadding()
+            } else {
+              Modifier
+            },
+        )
+      },
+      bottomBar = {
+        if (bottomBarConsumesNavInset) {
+          Column(
+            modifier =
+              Modifier.fillMaxWidth()
+                .let { if (isAnyFullscreen) it else it.navigationBarsPadding() }
+                .let { if (!isWideScreen) it.imePadding() else it }
+          ) {
+            AnimatedVisibility(visible = showMiniPlayerInBar) {
+              MiniMediaPlayerBar(
+                state = mediaState,
+                onExpand = viewModel.mediaManager::expandFromMiniPlayer,
+                onTogglePlayPause = viewModel.mediaManager::togglePlayPause,
+                onClose = viewModel.mediaManager::closePlayer,
+              )
+            }
+            if (showPhoneBottomDock) {
+              OmniboxDock(
+                tab = activeTab,
+                tabCount = tabs.size,
+                searchEngine = settings.searchEngine,
+                adBlockerType = settings.adBlockerType,
+                isVpnActive = vpnState.isAnyProtectionActive,
+                sessionDataUsedBytes = sessionDataUsedBytes,
+                showBottomNavControls = true,
+                onNavigate = viewModel::navigate,
+                onQueryChange = viewModel::onOmniboxQueryChanged,
+                onSelectSearchEngine = viewModel::setSearchEngine,
+                onCycleSearchEngine = viewModel::cycleSearchEngine,
+                onBack = { viewModel.goBack() },
+                onForward = viewModel::goForward,
+                onReloadOrStop = viewModel::reloadOrStop,
+                onHardReload = viewModel::hardReloadActiveTab,
+                onHome = viewModel::goHome,
+                onNewPrivateTab = { viewModel.newTab(isIncognito = true) },
+                onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
+                onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
+                onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
+                onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
+                onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
+                onOpenOmniSearch = viewModel::openOmniSearchWithQuery,
+                onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+                onShowToast = viewModel::showMessage,
+                onSwipeLeft = viewModel::switchToNextTab,
+                onSwipeRight = viewModel::switchToPreviousTab,
+              )
+            }
+          }
+        }
+      },
+      containerColor = MaterialTheme.colorScheme.background,
+    ) { innerPadding ->
+      Row(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding())) {
+        // Adaptive Tablet / Foldable NavigationRail (hidden in fullscreen or PiP)
+        if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
+          NavigationRail(
+            containerColor = MaterialTheme.colorScheme.surface,
+            modifier =
+              Modifier.statusBarsPadding().let {
+                if (!bottomBarConsumesNavInset) it.navigationBarsPadding() else it
+              },
+          ) {
               Spacer(modifier = Modifier.weight(0.2f))
               NavigationRailItem(
                 selected = activeTab.isSpeedDial,
@@ -344,30 +412,43 @@ fun VoltBrowserScreen(
             modifier =
               Modifier.weight(1f)
                 .fillMaxHeight()
-                .let { if (isAnyFullscreen) it else it.statusBarsPadding().navigationBarsPadding() }
-                .let { if (!isWideScreen) it.imePadding() else it }
+                .let {
+                  when {
+                    isAnyFullscreen -> it
+                    bottomBarConsumesNavInset -> it.statusBarsPadding()
+                    else -> it.statusBarsPadding().navigationBarsPadding()
+                  }
+                }
+                .let { if (!isWideScreen && !bottomBarConsumesNavInset) it.imePadding() else it }
           ) {
             // Top Omnibox on Wide Screens
             if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
               OmniboxDock(
                 tab = activeTab,
                 tabCount = tabs.size,
+                searchEngine = settings.searchEngine,
                 adBlockerType = settings.adBlockerType,
                 isVpnActive = vpnState.isAnyProtectionActive,
                 sessionDataUsedBytes = sessionDataUsedBytes,
                 showBottomNavControls = false,
                 onNavigate = viewModel::navigate,
                 onQueryChange = viewModel::onOmniboxQueryChanged,
+                onSelectSearchEngine = viewModel::setSearchEngine,
+                onCycleSearchEngine = viewModel::cycleSearchEngine,
                 onBack = { viewModel.goBack() },
                 onForward = viewModel::goForward,
                 onReloadOrStop = viewModel::reloadOrStop,
+                onHardReload = viewModel::hardReloadActiveTab,
                 onHome = viewModel::goHome,
+                onNewPrivateTab = { viewModel.newTab(isIncognito = true) },
                 onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
                 onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
                 onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
                 onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
                 onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
+                onOpenOmniSearch = viewModel::openOmniSearchWithQuery,
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+                onShowToast = viewModel::showMessage,
                 onSwipeLeft = viewModel::switchToNextTab,
                 onSwipeRight = viewModel::switchToPreviousTab,
               )
@@ -415,6 +496,7 @@ fun VoltBrowserScreen(
                         tabId = activeTab.id,
                         isIncognito = activeTab.isIncognito,
                         callbacks = viewModel.tabWebCallbacks,
+                        fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
                       )
                     if (container.childCount != 1 || container.getChildAt(0) !== wv) {
                       container.removeAllViews()
@@ -480,45 +562,8 @@ fun VoltBrowserScreen(
                 }
               }
             }
-
-            // Minimized Persistent Media3 Background Audio/Video Bar
-            AnimatedVisibility(visible = mediaState.isVisible && mediaState.isMinimized && !isInPipMode) {
-              MiniMediaPlayerBar(
-                state = mediaState,
-                onExpand = viewModel.mediaManager::expandFromMiniPlayer,
-                onTogglePlayPause = viewModel.mediaManager::togglePlayPause,
-                onClose = viewModel.mediaManager::closePlayer,
-              )
-            }
-
-            // Bottom Omnibox Dock on Phones (hidden while browser fullscreen is active)
-            if (!isWideScreen && !isInPipMode && !isBrowserFullscreen) {
-              OmniboxDock(
-                tab = activeTab,
-                tabCount = tabs.size,
-                adBlockerType = settings.adBlockerType,
-                isVpnActive = vpnState.isAnyProtectionActive,
-                sessionDataUsedBytes = sessionDataUsedBytes,
-                showBottomNavControls = true,
-                onNavigate = viewModel::navigate,
-                onQueryChange = viewModel::onOmniboxQueryChanged,
-                onBack = { viewModel.goBack() },
-                onForward = viewModel::goForward,
-                onReloadOrStop = viewModel::reloadOrStop,
-                onHome = viewModel::goHome,
-                onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
-                onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
-                onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
-                onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
-                onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
-                onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
-                onSwipeLeft = viewModel::switchToNextTab,
-                onSwipeRight = viewModel::switchToPreviousTab,
-              )
-            }
           }
         }
-      }
     }
 
     // Visual Tab Switcher Overlay
@@ -543,6 +588,9 @@ fun VoltBrowserScreen(
         onSeekTo = viewModel.mediaManager::seekTo,
         onSeekBy = viewModel.mediaManager::seekBy,
         onSelectSpeed = viewModel.mediaManager::setPlaybackSpeed,
+        onToggleMute = viewModel.mediaManager::toggleMute,
+        onToggleLoop = viewModel.mediaManager::toggleLoop,
+        onCycleResizeMode = viewModel.mediaManager::cycleResizeMode,
         onEnterPip = onEnterPip,
         onMinimize = viewModel.mediaManager::minimizeToMiniPlayer,
         onDownload = {
@@ -806,13 +854,22 @@ private fun FindInPageBar(
           )
         }
       }
-      IconButton(onClick = { onFindPrev(query) }, modifier = Modifier.size(36.dp)) {
+      IconButton(
+        onClick = { onFindPrev(query) },
+        modifier = Modifier.minimumInteractiveComponentSize(),
+      ) {
         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Previous match")
       }
-      IconButton(onClick = { onFindNext(query) }, modifier = Modifier.size(36.dp)) {
+      IconButton(
+        onClick = { onFindNext(query) },
+        modifier = Modifier.minimumInteractiveComponentSize(),
+      ) {
         Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Next match")
       }
-      IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+      IconButton(
+        onClick = onClose,
+        modifier = Modifier.minimumInteractiveComponentSize(),
+      ) {
         Icon(Icons.Default.Close, contentDescription = "Close find bar")
       }
     }

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- General browser navigation allows HTTP/HTTPS with system CAs only (no user-added MitM roots). -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Enforce strict HTTPS-only transport on all internal VPN, DoH, WARP, and IP-check endpoints. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">cloudflare-dns.com</domain>
+        <domain includeSubdomains="true">cloudflareclient.com</domain>
+        <domain includeSubdomains="true">dns.mullvad.net</domain>
+        <domain includeSubdomains="true">dns.adguard-dns.com</domain>
+        <domain includeSubdomains="true">controld.com</domain>
+        <domain includeSubdomains="true">dns.quad9.net</domain>
+        <domain includeSubdomains="true">doh.dns.sb</domain>
+        <domain includeSubdomains="true">api.ipify.org</domain>
+        <domain includeSubdomains="false">1.1.1.1</domain>
+        <domain includeSubdomains="true">proxylist.geonode.com</domain>
+        <domain includeSubdomains="true">api.proxyscrape.com</domain>
+        <domain includeSubdomains="true">raw.githubusercontent.com</domain>
+    </domain-config>
+</network-security-config>

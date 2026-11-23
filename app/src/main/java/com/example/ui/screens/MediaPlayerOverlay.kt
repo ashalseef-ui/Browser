@@ -44,10 +44,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,10 +61,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.R
 import com.example.media.MediaPlayerUiState
@@ -83,6 +81,9 @@ fun MediaPlayerOverlay(
   onSeekTo: (Long) -> Unit,
   onSeekBy: (Long) -> Unit,
   onSelectSpeed: (Float) -> Unit,
+  onToggleMute: () -> Unit,
+  onToggleLoop: () -> Unit,
+  onCycleResizeMode: () -> Unit,
   onEnterPip: () -> Unit,
   onMinimize: () -> Unit,
   onDownload: () -> Unit,
@@ -93,9 +94,6 @@ fun MediaPlayerOverlay(
   val voltColors = LocalVoltColors.current
   var showControls by remember { mutableStateOf(true) }
   var isControlsLocked by remember { mutableStateOf(false) }
-  var isMuted by remember { mutableStateOf(false) }
-  var isLooping by remember { mutableStateOf(false) }
-  var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
 
   Box(
     modifier =
@@ -124,7 +122,7 @@ fun MediaPlayerOverlay(
                 ViewGroup.LayoutParams.MATCH_PARENT,
               )
             useController = false
-            this.resizeMode = resizeMode
+            resizeMode = state.resizeMode
             player = controller
             keepScreenOn = true
             playerViewRef = this
@@ -132,7 +130,7 @@ fun MediaPlayerOverlay(
         },
         update = { view ->
           if (view.player !== controller) view.player = controller
-          view.resizeMode = resizeMode
+          view.resizeMode = state.resizeMode
         },
         modifier = Modifier.fillMaxSize(),
       )
@@ -196,6 +194,7 @@ fun MediaPlayerOverlay(
         modifier =
           Modifier.align(Alignment.BottomStart)
             .padding(20.dp)
+            .minimumInteractiveComponentSize()
             .clip(CircleShape)
             .clickable { isControlsLocked = false },
       ) {
@@ -263,32 +262,25 @@ fun MediaPlayerOverlay(
 
           Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             IconButton(
-              onClick = {
-                isMuted = !isMuted
-                controller?.volume = if (isMuted) 0f else 1f
-              },
+              onClick = onToggleMute,
               modifier = Modifier.testTag("player_mute_button"),
             ) {
               Icon(
                 imageVector =
-                  if (isMuted) Icons.AutoMirrored.Filled.VolumeOff
+                  if (state.isMuted) Icons.AutoMirrored.Filled.VolumeOff
                   else Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = if (isMuted) "Unmute" else "Mute",
-                tint = if (isMuted) voltColors.amberAccent else Color.White,
+                contentDescription = if (state.isMuted) "Unmute" else "Mute",
+                tint = if (state.isMuted) voltColors.amberAccent else Color.White,
               )
             }
             IconButton(
-              onClick = {
-                isLooping = !isLooping
-                controller?.repeatMode =
-                  if (isLooping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-              },
+              onClick = onToggleLoop,
               modifier = Modifier.testTag("player_loop_button"),
             ) {
               Icon(
-                imageVector = if (isLooping) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                imageVector = if (state.isLooping) Icons.Default.RepeatOne else Icons.Default.Repeat,
                 contentDescription = "Toggle loop",
-                tint = if (isLooping) voltColors.cyanAccent else Color.White,
+                tint = if (state.isLooping) voltColors.cyanAccent else Color.White,
               )
             }
             IconButton(
@@ -456,7 +448,7 @@ fun MediaPlayerOverlay(
             ) {
               IconButton(
                 onClick = { isControlsLocked = true },
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.minimumInteractiveComponentSize(),
               ) {
                 Icon(
                   imageVector = Icons.Default.LockOpen,
@@ -474,7 +466,8 @@ fun MediaPlayerOverlay(
                     if (selected) voltColors.cyanAccent
                     else Color.White.copy(alpha = 0.14f),
                   modifier =
-                    Modifier.clip(RoundedCornerShape(8.dp))
+                    Modifier.minimumInteractiveComponentSize()
+                      .clip(RoundedCornerShape(8.dp))
                       .clickable { onSelectSpeed(spd) },
                 ) {
                   Text(
@@ -488,17 +481,8 @@ fun MediaPlayerOverlay(
 
               if (state.hasVideoTrack) {
                 IconButton(
-                  onClick = {
-                    resizeMode =
-                      when (resizeMode) {
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT ->
-                          AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM ->
-                          AspectRatioFrameLayout.RESIZE_MODE_FILL
-                        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                      }
-                  },
-                  modifier = Modifier.size(34.dp),
+                  onClick = onCycleResizeMode,
+                  modifier = Modifier.minimumInteractiveComponentSize(),
                 ) {
                   Icon(
                     imageVector = Icons.Default.AspectRatio,

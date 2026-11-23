@@ -15,6 +15,7 @@ import com.example.data.BrowserSettings
 import com.example.data.SearchEngine
 import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ProxySelector
 import java.net.SocketAddress
@@ -27,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import okhttp3.ConnectionPool
 import okhttp3.Credentials
@@ -36,12 +38,19 @@ import okhttp3.Request
 
 class VoltSpeedEngine(private val context: Context) {
 
+  data class ProxyAuthTarget(
+    val host: String,
+    val port: Int,
+    val username: String,
+    val password: String,
+  )
+
   private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val startupExecutor = Executors.newSingleThreadExecutor()
   private val prewarmedHosts = ConcurrentHashMap.newKeySet<String>()
 
   private val activeProxyRef = AtomicReference<Proxy?>(null)
-  private val activeProxyAuthRef = AtomicReference<Pair<String, String>?>(null)
+  private val activeProxyAuthRef = AtomicReference<ProxyAuthTarget?>(null)
 
   @Volatile var isWebViewWarmedUp: Boolean = false
     private set
@@ -67,7 +76,7 @@ class VoltSpeedEngine(private val context: Context) {
         if (response.request.header("Proxy-Authorization") != null) return@proxyAuthenticator null
         response.request
           .newBuilder()
-          .header("Proxy-Authorization", Credentials.basic(creds.first, creds.second))
+          .header("Proxy-Authorization", Credentials.basic(creds.username, creds.password))
           .build()
       }
       .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
@@ -79,13 +88,28 @@ class VoltSpeedEngine(private val context: Context) {
 
   fun setActiveProxy(proxy: Proxy?, username: String? = null, password: String? = null) {
     activeProxyRef.set(proxy)
+    val sockAddr = proxy?.address() as? InetSocketAddress
+    val host = sockAddr?.hostString.orEmpty()
+    val port = sockAddr?.port ?: -1
     activeProxyAuthRef.set(
-      if (proxy != null && !username.isNullOrBlank()) username to password.orEmpty() else null
+      if (proxy != null && !username.isNullOrBlank() && host.isNotBlank()) {
+        ProxyAuthTarget(
+          host = host,
+          port = port,
+          username = username,
+          password = password.orEmpty(),
+        )
+      } else {
+        null
+      }
     )
     prewarmedHosts.clear()
   }
 
-  fun getActiveProxyCredentials(): Pair<String, String>? = activeProxyAuthRef.get()
+  fun getActiveProxyAuthTarget(): ProxyAuthTarget? = activeProxyAuthRef.get()
+
+  fun getActiveProxyCredentials(): Pair<String, String>? =
+    activeProxyAuthRef.get()?.let { it.username to it.password }
 
   @Suppress("OPT_IN_USAGE")
   fun warmUpChromiumAsync() {
@@ -108,7 +132,11 @@ class VoltSpeedEngine(private val context: Context) {
   fun prewarmOrigin(rawUrl: String) {
     if (activeProxyRef.get() != null) return
     val normalized = normalizeInputToUrl(rawUrl, SearchEngine.DUCKDUCKGO, forceUrlOnly = true) ?: return
-    val host = runCatching { java.net.URI(normalized).host }.getOrNull() ?: return
+    val host = runCatching { URI(normalized).host }.getOrNull()?.trim() ?: return
+    if (!isValidPrewarmHost(host)) return
+    if (prewarmedHosts.size >= MAX_PREWARMED_HOSTS) {
+      prewarmedHosts.clear()
+    }
     if (!prewarmedHosts.add(host)) return
 
     engineScope.launch {
@@ -166,13 +194,18 @@ class VoltSpeedEngine(private val context: Context) {
     }
   }
 
-  fun wipeEphemeralCacheAndStorage(webView: WebView? = null) {
+  fun wipeEphemeralCacheAndStorage(
+    webView: WebView? = null,
+    wipeGlobalProfileStorage: Boolean = false,
+  ) {
     runCatching {
       webView?.clearCache(true)
       webView?.clearFormData()
       webView?.clearHistory()
       webView?.clearSslPreferences()
-      DeviceTraceCleaner.wipeWebViewTraces(context)
+      if (wipeGlobalProfileStorage) {
+        DeviceTraceCleaner.wipeWebViewTraces(context)
+      }
     }
   }
 
@@ -182,7 +215,113 @@ class VoltSpeedEngine(private val context: Context) {
     runCatching { okHttpClient.cache?.delete() }
   }
 
+  fun shutdown() {
+    engineScope.cancel()
+    runCatching { startupExecutor.shutdownNow() }
+    clearNetworkPools()
+  }
+
+  sealed class OmniboxResolution {
+    data class NavigateUrl(val url: String, val engineUsed: SearchEngine? = null) : OmniboxResolution()
+    data class OmniMultiSearch(val query: String) : OmniboxResolution()
+  }
+
   companion object {
+    private const val MAX_PREWARMED_HOSTS = 256
+
+    fun isValidPrewarmHost(host: String): Boolean {
+      if (host.isBlank() || host.length > 253) return false
+      if (host.any { it.isWhitespace() || it == '/' || it == '@' || it == '\\' }) return false
+      if (host.startsWith('.') || host.endsWith('.')) return false
+      if (!host.equals("localhost", ignoreCase = true) && !host.contains('.')) return false
+      return true
+    }
+
+    /**
+     * Detects Firefox/DuckDuckGo-style bang shortcuts (e.g. "!w kotlin", "!g weather", "/b news", or "kotlin !w").
+     * Purely local string inspection — zero network calls.
+     */
+    fun detectBangShortcut(input: String): Pair<SearchEngine, String>? {
+      val trimmed = input.trim()
+      if (trimmed.isEmpty()) return null
+      val firstSpace = trimmed.indexOfFirst { it.isWhitespace() }
+      if (firstSpace > 0) {
+        val leadingToken = trimmed.substring(0, firstSpace)
+        val engine = SearchEngine.fromBang(leadingToken)
+        if (engine != null) {
+          val remainder = trimmed.substring(firstSpace + 1).trim()
+          return engine to remainder
+        }
+      } else {
+        val soloEngine = SearchEngine.fromBang(trimmed)
+        if (soloEngine != null) {
+          return soloEngine to ""
+        }
+      }
+      val lastSpace = trimmed.lastIndexOfAny(charArrayOf(' ', '\t'))
+      if (lastSpace > 0 && lastSpace < trimmed.lastIndex) {
+        val trailingToken = trimmed.substring(lastSpace + 1)
+        val engine = SearchEngine.fromBang(trailingToken)
+        if (engine != null) {
+          val remainder = trimmed.substring(0, lastSpace).trim()
+          return engine to remainder
+        }
+      }
+      return null
+    }
+
+    fun extractOmniBangQuery(input: String): String? {
+      val trimmed = input.trim()
+      if (trimmed.isEmpty()) return null
+      val firstSpace = trimmed.indexOfFirst { it.isWhitespace() }
+      if (firstSpace <= 0) return null
+      val prefix = trimmed.substring(0, firstSpace).lowercase()
+      if (prefix == "!omni" || prefix == "/omni" || prefix == "!!") {
+        return trimmed.substring(firstSpace + 1).trim().takeIf { it.isNotEmpty() }
+      }
+      return null
+    }
+
+    fun resolveOmniboxInput(
+      input: String,
+      defaultEngine: SearchEngine,
+      forceUrlOnly: Boolean = false,
+    ): OmniboxResolution? {
+      val trimmed = input.trim()
+      if (trimmed.isEmpty()) return null
+
+      if (!forceUrlOnly) {
+        extractOmniBangQuery(trimmed)?.let { multiQuery ->
+          return OmniboxResolution.OmniMultiSearch(multiQuery)
+        }
+        val bang = detectBangShortcut(trimmed)
+        if (bang != null) {
+          val (engine, query) = bang
+          if (query.isNotBlank()) {
+            val encoded = URLEncoder.encode(query, "UTF-8")
+            return OmniboxResolution.NavigateUrl(
+              url = engine.searchUrlTemplate.replace("%s", encoded),
+              engineUsed = engine,
+            )
+          }
+          // Bare bang like "!w" opens that engine's home domain directly
+          return OmniboxResolution.NavigateUrl(
+            url = "https://${engine.domain}",
+            engineUsed = engine,
+          )
+        }
+      }
+
+      val url = normalizeInputToUrl(trimmed, defaultEngine, forceUrlOnly) ?: return null
+      val engineUsed =
+        if (url == "https://$trimmed" || trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) {
+          null
+        } else {
+          defaultEngine
+        }
+      return OmniboxResolution.NavigateUrl(url = url, engineUsed = engineUsed)
+    }
+
     fun normalizeInputToUrl(
       input: String,
       searchEngine: SearchEngine,

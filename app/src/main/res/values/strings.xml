@@ -34,6 +34,9 @@
     <string name="cd_close_player">Close player</string>
     <string name="cd_background_audio">Minimize to background audio bar</string>
     <string name="cd_exit">Exit and erase all data</string>
+    <string name="cd_search_engine_selector">Active search engine %1$s. Tap to choose or swipe to switch.</string>
+    <string name="cd_omnibox_go">Search or go to address</string>
+    <string name="cd_paste_and_go">Paste from clipboard and go</string>
     <string name="exit_erase_title">Exit &amp; Erase Everything?</string>
     <string name="exit_erase_message">This closes all tabs, stops downloads, media playback, and proxy/VPN tunnels, and erases all browser caches, cookies, WebView storage, temporary files, and app data on this device.</string>
 </resources>

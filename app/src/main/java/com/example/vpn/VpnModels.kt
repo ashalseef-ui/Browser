@@ -137,6 +137,8 @@ object DnsPacketCodec {
     if (version != 4) return null
     val ihl = (packet[0].toInt() and 0x0F) * 4
     if (ihl < 20 || length < ihl + 8) return null
+    val fragField = ((packet[6].toInt() and 0x3F) shl 8) or (packet[7].toInt() and 0xFF)
+    if (fragField != 0) return null // Reject fragmented IPv4 packets
     val protocol = packet[9].toInt() and 0xFF
     if (protocol != 17) return null // UDP only
 
@@ -149,9 +151,12 @@ object DnsPacketCodec {
     val udpLen = ((packet[ihl + 4].toInt() and 0xFF) shl 8) or (packet[ihl + 5].toInt() and 0xFF)
     if (udpLen < 8) return null
     val payloadEnd = minOf(length, ihl + udpLen)
-    if (payloadEnd <= ihl + 8) return null
+    if (payloadEnd - (ihl + 8) < 12) return null
 
     val dnsPayload = packet.copyOfRange(ihl + 8, payloadEnd)
+    // QR bit (bit 7 of byte 2) must be 0 for DNS queries
+    if ((dnsPayload[2].toInt() and 0x80) != 0) return null
+
     return ParsedDnsPacket(
       srcIp = srcIp,
       dstIp = dstIp,
@@ -160,6 +165,101 @@ object DnsPacketCodec {
       dnsPayload = dnsPayload,
     )
   }
+
+  fun extractNormalizedQuestionKey(dnsQuery: ByteArray): String? {
+    if (dnsQuery.size <= 12) return null
+    var pos = 12
+    val labels = StringBuilder()
+    var steps = 0
+    while (pos < dnsQuery.size && steps < 128) {
+      val len = dnsQuery[pos].toInt() and 0xFF
+      if (len == 0) {
+        pos += 1
+        break
+      }
+      if ((len and 0xC0) != 0 || pos + 1 + len > dnsQuery.size) {
+        return hexFallbackKey(dnsQuery)
+      }
+      for (i in 1..len) {
+        val ch = (dnsQuery[pos + i].toInt() and 0xFF).toChar().lowercaseChar()
+        labels.append(ch)
+      }
+      labels.append('.')
+      pos += 1 + len
+      steps++
+    }
+    if (pos + 4 > dnsQuery.size) {
+      return hexFallbackKey(dnsQuery)
+    }
+    val qtype = ((dnsQuery[pos].toInt() and 0xFF) shl 8) or (dnsQuery[pos + 1].toInt() and 0xFF)
+    val qclass = ((dnsQuery[pos + 2].toInt() and 0xFF) shl 8) or (dnsQuery[pos + 3].toInt() and 0xFF)
+    return "${labels}|$qtype|$qclass"
+  }
+
+  private fun hexFallbackKey(dnsQuery: ByteArray): String {
+    val sb = StringBuilder((dnsQuery.size - 12) * 2)
+    for (i in 12 until dnsQuery.size) {
+      val b = dnsQuery[i].toInt() and 0xFF
+      sb.append(HEX_CHARS[b ushr 4]).append(HEX_CHARS[b and 0x0F])
+    }
+    return sb.toString()
+  }
+
+  fun extractRcode(dnsResponse: ByteArray): Int {
+    if (dnsResponse.size < 4) return -1
+    return dnsResponse[3].toInt() and 0x0F
+  }
+
+  fun extractMinAnswerTtlSeconds(dnsResponse: ByteArray): Long? {
+    if (dnsResponse.size < 12) return null
+    val qdCount = ((dnsResponse[4].toInt() and 0xFF) shl 8) or (dnsResponse[5].toInt() and 0xFF)
+    val anCount = ((dnsResponse[6].toInt() and 0xFF) shl 8) or (dnsResponse[7].toInt() and 0xFF)
+    if (anCount <= 0 || qdCount > 16 || anCount > 64) return null
+
+    var pos = 12
+    for (q in 0 until qdCount) {
+      pos = skipDnsName(dnsResponse, pos) ?: return null
+      pos += 4 // QTYPE + QCLASS
+      if (pos > dnsResponse.size) return null
+    }
+
+    var minTtl: Long? = null
+    for (a in 0 until anCount) {
+      pos = skipDnsName(dnsResponse, pos) ?: break
+      if (pos + 10 > dnsResponse.size) break
+      val ttl =
+        ((dnsResponse[pos + 4].toLong() and 0xFF) shl 24) or
+          ((dnsResponse[pos + 5].toLong() and 0xFF) shl 16) or
+          ((dnsResponse[pos + 6].toLong() and 0xFF) shl 8) or
+          (dnsResponse[pos + 7].toLong() and 0xFF)
+      val rdLen = ((dnsResponse[pos + 8].toInt() and 0xFF) shl 8) or (dnsResponse[pos + 9].toInt() and 0xFF)
+      pos += 10 + rdLen
+      if (pos > dnsResponse.size) break
+      minTtl = if (minTtl == null) ttl else minOf(minTtl, ttl)
+    }
+    return minTtl?.coerceIn(5L, 3600L)
+  }
+
+  private fun skipDnsName(packet: ByteArray, startOffset: Int): Int? {
+    var pos = startOffset
+    var steps = 0
+    while (pos < packet.size && steps < 128) {
+      val len = packet[pos].toInt() and 0xFF
+      when {
+        len == 0 -> return pos + 1
+        (len and 0xC0) == 0xC0 -> return if (pos + 1 < packet.size) pos + 2 else null
+        (len and 0xC0) != 0 -> return null
+        else -> {
+          pos += 1 + len
+          if (pos > packet.size) return null
+        }
+      }
+      steps++
+    }
+    return null
+  }
+
+  private const val HEX_CHARS = "0123456789abcdef"
 
   fun buildIpv4UdpDnsResponse(query: ParsedDnsPacket, dnsResponse: ByteArray): ByteArray {
     val ipHeaderLen = 20

@@ -6,9 +6,9 @@ import androidx.webkit.WebViewFeature
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -35,7 +35,7 @@ data class RelayScanSummary(
 
 class PublicRelayManager {
 
-  private val proxyExecutor = Executors.newSingleThreadExecutor()
+  private val proxyExecutor = Dispatchers.IO.asExecutor()
 
   // Always direct (never loops through an active/stale WebView proxy)
   private val directClient: OkHttpClient =

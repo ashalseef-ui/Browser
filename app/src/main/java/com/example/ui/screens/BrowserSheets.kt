@@ -689,7 +689,7 @@ fun LibrarySettingsSheet(
                         color = MaterialTheme.colorScheme.onSurface,
                       )
                       Text(
-                        text = engine.domain,
+                        text = "${engine.domain}  •  ${engine.bangs.joinToString("  ")}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                       )

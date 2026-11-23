@@ -30,7 +30,9 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
-    handleIncomingIntent(intent)
+    if (savedInstanceState == null) {
+      handleIncomingIntent(intent)
+    }
 
     setContent {
       val settings by viewModel.settings.collectAsStateWithLifecycle()

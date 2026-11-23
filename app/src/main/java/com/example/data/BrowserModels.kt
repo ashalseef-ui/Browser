@@ -2,19 +2,138 @@ package com.example.data
 
 import java.util.UUID
 
-enum class SearchEngine(val displayName: String, val searchUrlTemplate: String, val domain: String) {
-  DUCKDUCKGO("DuckDuckGo", "https://duckduckgo.com/?q=%s", "duckduckgo.com"),
-  GOOGLE("Google", "https://www.google.com/search?q=%s", "google.com"),
-  BRAVE("Brave Search", "https://search.brave.com/search?q=%s", "search.brave.com"),
-  MOJEEK("Mojeek", "https://www.mojeek.com/search?q=%s", "mojeek.com"),
-  MARGINALIA("Marginalia Search", "https://search.marginalia.nu/search?query=%s", "search.marginalia.nu"),
-  YANDEX("Yandex", "https://yandex.com/search/?text=%s", "yandex.com"),
-  KAGI("Kagi", "https://kagi.com/search?q=%s", "kagi.com"),
-  QWANT("Qwant", "https://www.qwant.com/?q=%s", "qwant.com"),
-  ECOSIA("Ecosia", "https://www.ecosia.org/search?q=%s", "ecosia.org"),
-  SEARXNG("SearXNG", "https://priv.au/search?q=%s", "priv.au"),
-  YACY("YaCy", "https://yacy.searchlab.eu/yacysearch.html?query=%s", "yacy.searchlab.eu"),
-  WIKIPEDIA("Wikipedia", "https://en.wikipedia.org/wiki/Special:Search?search=%s", "wikipedia.org"),
+enum class SearchEngine(
+  val displayName: String,
+  val searchUrlTemplate: String,
+  val domain: String,
+  val shortLabel: String,
+  val badgeCode: String,
+  val accentColorHex: Long,
+  val bangs: List<String>,
+) {
+  DUCKDUCKGO(
+    displayName = "DuckDuckGo",
+    searchUrlTemplate = "https://duckduckgo.com/?q=%s",
+    domain = "duckduckgo.com",
+    shortLabel = "DuckDuckGo",
+    badgeCode = "DDG",
+    accentColorHex = 0xFFDE5833,
+    bangs = listOf("!ddg", "!d"),
+  ),
+  GOOGLE(
+    displayName = "Google",
+    searchUrlTemplate = "https://www.google.com/search?q=%s",
+    domain = "google.com",
+    shortLabel = "Google",
+    badgeCode = "G",
+    accentColorHex = 0xFF4285F4,
+    bangs = listOf("!g"),
+  ),
+  BRAVE(
+    displayName = "Brave Search",
+    searchUrlTemplate = "https://search.brave.com/search?q=%s",
+    domain = "search.brave.com",
+    shortLabel = "Brave",
+    badgeCode = "BRV",
+    accentColorHex = 0xFFFB542B,
+    bangs = listOf("!b", "!br", "!brave"),
+  ),
+  MOJEEK(
+    displayName = "Mojeek",
+    searchUrlTemplate = "https://www.mojeek.com/search?q=%s",
+    domain = "mojeek.com",
+    shortLabel = "Mojeek",
+    badgeCode = "MJK",
+    accentColorHex = 0xFF4CAF50,
+    bangs = listOf("!m", "!mj", "!mojeek"),
+  ),
+  MARGINALIA(
+    displayName = "Marginalia Search",
+    searchUrlTemplate = "https://search.marginalia.nu/search?query=%s",
+    domain = "search.marginalia.nu",
+    shortLabel = "Marginalia",
+    badgeCode = "MRG",
+    accentColorHex = 0xFFF59E0B,
+    bangs = listOf("!mg", "!marg"),
+  ),
+  YANDEX(
+    displayName = "Yandex",
+    searchUrlTemplate = "https://yandex.com/search/?text=%s",
+    domain = "yandex.com",
+    shortLabel = "Yandex",
+    badgeCode = "YDX",
+    accentColorHex = 0xFFEF4444,
+    bangs = listOf("!y", "!ya"),
+  ),
+  KAGI(
+    displayName = "Kagi",
+    searchUrlTemplate = "https://kagi.com/search?q=%s",
+    domain = "kagi.com",
+    shortLabel = "Kagi",
+    badgeCode = "KGI",
+    accentColorHex = 0xFFFFB300,
+    bangs = listOf("!k", "!kagi"),
+  ),
+  QWANT(
+    displayName = "Qwant",
+    searchUrlTemplate = "https://www.qwant.com/?q=%s",
+    domain = "qwant.com",
+    shortLabel = "Qwant",
+    badgeCode = "QWT",
+    accentColorHex = 0xFF5C6BC0,
+    bangs = listOf("!q", "!qw"),
+  ),
+  ECOSIA(
+    displayName = "Ecosia",
+    searchUrlTemplate = "https://www.ecosia.org/search?q=%s",
+    domain = "ecosia.org",
+    shortLabel = "Ecosia",
+    badgeCode = "ECO",
+    accentColorHex = 0xFF2E7D32,
+    bangs = listOf("!e", "!eco"),
+  ),
+  SEARXNG(
+    displayName = "SearXNG",
+    searchUrlTemplate = "https://priv.au/search?q=%s",
+    domain = "priv.au",
+    shortLabel = "SearXNG",
+    badgeCode = "SXG",
+    accentColorHex = 0xFF06B6D4,
+    bangs = listOf("!sx", "!searx"),
+  ),
+  YACY(
+    displayName = "YaCy",
+    searchUrlTemplate = "https://yacy.searchlab.eu/yacysearch.html?query=%s",
+    domain = "yacy.searchlab.eu",
+    shortLabel = "YaCy",
+    badgeCode = "YCY",
+    accentColorHex = 0xFF0EA5E9,
+    bangs = listOf("!yc", "!yacy"),
+  ),
+  WIKIPEDIA(
+    displayName = "Wikipedia",
+    searchUrlTemplate = "https://en.wikipedia.org/wiki/Special:Search?search=%s",
+    domain = "wikipedia.org",
+    shortLabel = "Wikipedia",
+    badgeCode = "WK",
+    accentColorHex = 0xFFE2E8F0,
+    bangs = listOf("!w", "!wiki"),
+  );
+
+  fun cycled(step: Int): SearchEngine {
+    val all = entries
+    val nextIdx = ((ordinal + step) % all.size + all.size) % all.size
+    return all[nextIdx]
+  }
+
+  companion object {
+    fun fromBang(token: String): SearchEngine? {
+      val normalized = token.trim().lowercase().let {
+        if (it.startsWith("/")) "!${it.drop(1)}" else it
+      }
+      return entries.firstOrNull { engine -> engine.bangs.any { it == normalized } }
+    }
+  }
 }
 
 enum class MediaKind {

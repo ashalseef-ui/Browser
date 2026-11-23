@@ -9,12 +9,16 @@ import com.example.browser.MediaSniffer
 import com.example.browser.PlaylistResolver
 import com.example.browser.TurboShield
 import com.example.browser.VoltSpeedEngine
+import com.example.browser.WebViewTabPool
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
 import com.example.data.SearchEngine
+import com.example.data.SecureConfigCipher
+import com.example.media.MediaDownloader
 import com.example.vpn.DnsPacketCodec
 import com.example.vpn.PublicRelayManager
 import java.io.File
+import javax.crypto.KeyGenerator
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -616,5 +620,193 @@ class ExampleRobolectricTest {
         domTarget = null,
       )
     assertNull(plainText)
+  }
+
+  @Test
+  fun `dns packet codec normalizes question keys extracts rcode and clamps min answer ttl`() {
+    fun buildQuery(txIdHi: Int, txIdLo: Int, labels: List<String>, qType: Int = 1): ByteArray {
+      val body = mutableListOf<Byte>(
+        txIdHi.toByte(), txIdLo.toByte(),
+        0x01, 0x00, // Standard query
+        0x00, 0x01, // QDCOUNT = 1
+        0x00, 0x00, // ANCOUNT = 0
+        0x00, 0x00, // NSCOUNT = 0
+        0x00, 0x00, // ARCOUNT = 0
+      )
+      labels.forEach { label ->
+        body.add(label.length.toByte())
+        label.toByteArray().forEach { body.add(it) }
+      }
+      body.add(0)
+      body.add(((qType ushr 8) and 0xFF).toByte())
+      body.add((qType and 0xFF).toByte())
+      body.add(0x00)
+      body.add(0x01) // QCLASS IN
+      return body.toByteArray()
+    }
+
+    val qUpper = buildQuery(0x11, 0x22, listOf("Example", "COM"), qType = 1)
+    val qLower = buildQuery(0x99, 0xAA, listOf("example", "com"), qType = 1)
+    val qOther = buildQuery(0x11, 0x22, listOf("other", "com"), qType = 1)
+    val keyUpper = DnsPacketCodec.extractNormalizedQuestionKey(qUpper)
+    val keyLower = DnsPacketCodec.extractNormalizedQuestionKey(qLower)
+    val keyOther = DnsPacketCodec.extractNormalizedQuestionKey(qOther)
+    assertNotNull(keyUpper)
+    assertEquals(keyUpper, keyLower)
+    assertFalse(keyUpper == keyOther)
+
+    // Synthetic DNS response with RCODE=0, compressed answer name 0xC0 0x0C, TTL = 2s (clamped to 5s)
+    // and second answer TTL = 120s -> min = 5s; also test 120s and 7200s (clamped to 3600s)
+    fun buildResponse(rcode: Int, ttls: List<Long>): ByteArray {
+      val out = mutableListOf<Byte>(
+        0x11, 0x22,
+        0x81.toByte(), (0x80 or (rcode and 0x0F)).toByte(),
+        0x00, 0x01, // QDCOUNT = 1
+        0x00, ttls.size.toByte(), // ANCOUNT
+        0x00, 0x00,
+        0x00, 0x00,
+      )
+      // Question: example.com A IN (offset 12)
+      out.addAll(listOf(7, 'e'.code.toByte(), 'x'.code.toByte(), 'a'.code.toByte(), 'm'.code.toByte(), 'p'.code.toByte(), 'l'.code.toByte(), 'e'.code.toByte()))
+      out.addAll(listOf(3, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0))
+      out.addAll(listOf(0x00, 0x01, 0x00, 0x01))
+      ttls.forEach { ttl ->
+        out.addAll(listOf(0xC0.toByte(), 0x0C)) // Compression pointer to offset 12
+        out.addAll(listOf(0x00, 0x01, 0x00, 0x01)) // Type A, Class IN
+        out.add(((ttl ushr 24) and 0xFF).toByte())
+        out.add(((ttl ushr 16) and 0xFF).toByte())
+        out.add(((ttl ushr 8) and 0xFF).toByte())
+        out.add((ttl and 0xFF).toByte())
+        out.addAll(listOf(0x00, 0x04, 93, 184.toByte(), 216.toByte(), 34))
+      }
+      return out.toByteArray()
+    }
+
+    val okShortResp = buildResponse(rcode = 0, ttls = listOf(120L, 2L))
+    assertEquals(0, DnsPacketCodec.extractRcode(okShortResp))
+    assertEquals(5L, DnsPacketCodec.extractMinAnswerTtlSeconds(okShortResp))
+
+    val okLongResp = buildResponse(rcode = 0, ttls = listOf(7200L, 600L))
+    assertEquals(600L, DnsPacketCodec.extractMinAnswerTtlSeconds(okLongResp))
+
+    val clampedMaxResp = buildResponse(rcode = 0, ttls = listOf(86400L))
+    assertEquals(3600L, DnsPacketCodec.extractMinAnswerTtlSeconds(clampedMaxResp))
+
+    val nxDomainResp = buildResponse(rcode = 3, ttls = emptyList())
+    assertEquals(3, DnsPacketCodec.extractRcode(nxDomainResp))
+    assertNull(DnsPacketCodec.extractMinAnswerTtlSeconds(nxDomainResp))
+  }
+
+  @Test
+  fun `webview tab pool only provides proxy credentials for exact matching proxy host`() {
+    assertTrue(WebViewTabPool.shouldProvideProxyCredentials("203.0.113.10", "203.0.113.10"))
+    assertTrue(WebViewTabPool.shouldProvideProxyCredentials("Proxy.Example.COM", "proxy.example.com"))
+    assertFalse(WebViewTabPool.shouldProvideProxyCredentials("evil.example.com", "203.0.113.10"))
+    assertFalse(WebViewTabPool.shouldProvideProxyCredentials("203.0.113.10", null))
+    assertFalse(WebViewTabPool.shouldProvideProxyCredentials("", "203.0.113.10"))
+  }
+
+  @Test
+  fun `secure config cipher encrypts decrypts handles empty and passes legacy plaintext`() {
+    val keyGen = KeyGenerator.getInstance("AES")
+    keyGen.init(256)
+    val secretKey = keyGen.generateKey()
+
+    val wgConf = "[Interface]\nPrivateKey = abc123==\n[Peer]\nEndpoint = 162.159.192.1:2408"
+    val encrypted = SecureConfigCipher.encryptWithKey(wgConf, secretKey)
+    assertTrue(encrypted.startsWith("enc:v1:"))
+    assertFalse(encrypted.contains("abc123=="))
+    assertEquals(wgConf, SecureConfigCipher.decryptWithKey(encrypted, secretKey))
+
+    assertEquals(wgConf, SecureConfigCipher.decryptWithKey(wgConf, secretKey))
+    assertEquals("", SecureConfigCipher.encrypt(""))
+    assertEquals("", SecureConfigCipher.decrypt(""))
+  }
+
+  @Test
+  fun `media downloader rejects oversized data urls`() {
+    val overDecodedLimit = "data:application/octet-stream;base64," + "A".repeat(34_952_540)
+    assertNull(MediaDownloader.parseDataUrl(overDecodedLimit))
+
+    val overCharLimit = "data:text/plain;base64," + "A".repeat(36_000_005)
+    assertNull(MediaDownloader.parseDataUrl(overCharLimit))
+  }
+
+  @Test
+  fun `volt speed engine validates prewarm hosts strictly`() {
+    assertTrue(VoltSpeedEngine.isValidPrewarmHost("wikipedia.org"))
+    assertTrue(VoltSpeedEngine.isValidPrewarmHost("localhost"))
+    assertFalse(VoltSpeedEngine.isValidPrewarmHost(""))
+    assertFalse(VoltSpeedEngine.isValidPrewarmHost("invalid host.com"))
+    assertFalse(VoltSpeedEngine.isValidPrewarmHost(".leadingdot.com"))
+    assertFalse(VoltSpeedEngine.isValidPrewarmHost("trailingdot.com."))
+    assertFalse(VoltSpeedEngine.isValidPrewarmHost("singlelabel"))
+    assertFalse(VoltSpeedEngine.isValidPrewarmHost("user@host.com"))
+  }
+
+  @Test
+  fun `search engine cycles seamlessly and resolves bang shortcuts`() {
+    val entries = SearchEngine.entries
+    assertEquals(entries[1], entries.first().cycled(1))
+    assertEquals(entries.last(), entries.first().cycled(-1))
+    assertEquals(entries.first(), entries.last().cycled(1))
+
+    assertEquals(SearchEngine.WIKIPEDIA, SearchEngine.fromBang("!w"))
+    assertEquals(SearchEngine.GOOGLE, SearchEngine.fromBang("/G"))
+    assertEquals(SearchEngine.SEARXNG, SearchEngine.fromBang("!sx"))
+    assertEquals(SearchEngine.DUCKDUCKGO, SearchEngine.fromBang("!ddg"))
+    assertNull(SearchEngine.fromBang("!unknown"))
+    assertNull(SearchEngine.fromBang("plain"))
+  }
+
+  @Test
+  fun `volt speed engine resolves leading trailing bare bangs omni search and direct urls`() {
+    val leading = VoltSpeedEngine.detectBangShortcut("!w jetpack compose")
+    assertNotNull(leading)
+    assertEquals(SearchEngine.WIKIPEDIA, leading!!.first)
+    assertEquals("jetpack compose", leading.second)
+
+    val trailing = VoltSpeedEngine.detectBangShortcut("kotlin coroutines /g")
+    assertNotNull(trailing)
+    assertEquals(SearchEngine.GOOGLE, trailing!!.first)
+    assertEquals("kotlin coroutines", trailing.second)
+
+    val bare = VoltSpeedEngine.detectBangShortcut("!brave")
+    assertNotNull(bare)
+    assertEquals(SearchEngine.BRAVE, bare!!.first)
+    assertEquals("", bare.second)
+
+    assertEquals("privacy browser", VoltSpeedEngine.extractOmniBangQuery("!omni privacy browser"))
+    assertEquals("android", VoltSpeedEngine.extractOmniBangQuery("!! android"))
+    assertNull(VoltSpeedEngine.extractOmniBangQuery("/omni"))
+    assertNull(VoltSpeedEngine.extractOmniBangQuery("normal search"))
+
+    val omniRes = VoltSpeedEngine.resolveOmniboxInput("!omni zero leak", SearchEngine.DUCKDUCKGO)
+    assertTrue(omniRes is VoltSpeedEngine.OmniboxResolution.OmniMultiSearch)
+    assertEquals("zero leak", (omniRes as VoltSpeedEngine.OmniboxResolution.OmniMultiSearch).query)
+
+    val bangRes = VoltSpeedEngine.resolveOmniboxInput("!w android", SearchEngine.DUCKDUCKGO)
+    assertTrue(bangRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
+    val bangNav = bangRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
+    assertEquals(SearchEngine.WIKIPEDIA, bangNav.engineUsed)
+    assertEquals("https://en.wikipedia.org/wiki/Special:Search?search=android", bangNav.url)
+
+    val bareBangRes = VoltSpeedEngine.resolveOmniboxInput("!sx", SearchEngine.DUCKDUCKGO)
+    assertTrue(bareBangRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
+    val bareNav = bareBangRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
+    assertEquals(SearchEngine.SEARXNG, bareNav.engineUsed)
+    assertEquals("https://priv.au", bareNav.url)
+
+    val urlRes = VoltSpeedEngine.resolveOmniboxInput("wikipedia.org", SearchEngine.DUCKDUCKGO)
+    assertTrue(urlRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
+    val urlNav = urlRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
+    assertNull(urlNav.engineUsed)
+    assertEquals("https://wikipedia.org", urlNav.url)
+
+    val defaultSearchRes = VoltSpeedEngine.resolveOmniboxInput("compose swipe", SearchEngine.BRAVE)
+    assertTrue(defaultSearchRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
+    val defaultNav = defaultSearchRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
+    assertEquals(SearchEngine.BRAVE, defaultNav.engineUsed)
+    assertEquals("https://search.brave.com/search?q=compose+swipe", defaultNav.url)
   }
 }

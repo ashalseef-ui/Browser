@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,7 +115,7 @@ fun TabSwitcherOverlay(
           Surface(
             modifier =
               Modifier.fillMaxWidth()
-                .height(148.dp)
+                .heightIn(min = 148.dp)
                 .clip(cardShape)
                 .border(if (isActive) 2.dp else 1.dp, borderColor, cardShape)
                 .clickable { onSelectTab(tab.id) }
@@ -165,7 +167,7 @@ fun TabSwitcherOverlay(
 
                 IconButton(
                   onClick = { onCloseTab(tab.id) },
-                  modifier = Modifier.size(28.dp).testTag("close_tab_${tab.id}"),
+                  modifier = Modifier.minimumInteractiveComponentSize().testTag("close_tab_${tab.id}"),
                 ) {
                   Icon(
                     imageVector = Icons.Default.Close,

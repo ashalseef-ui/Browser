@@ -1,11 +1,22 @@
 package com.example.ui.components
 
+import android.content.ClipDescription
+import android.content.Context
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +27,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -27,13 +37,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.HorizontalDivider
@@ -47,6 +58,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -55,53 +67,107 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.browser.VoltSpeedEngine
 import com.example.data.AdBlockerType
 import com.example.data.BrowserTabState
+import com.example.data.SearchEngine
 import com.example.ui.theme.LocalVoltColors
+import com.example.ui.theme.badgeAccentColor
+import kotlin.math.abs
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun OmniboxDock(
   tab: BrowserTabState,
   tabCount: Int,
+  searchEngine: SearchEngine,
   adBlockerType: AdBlockerType,
   isVpnActive: Boolean,
   sessionDataUsedBytes: Long,
   showBottomNavControls: Boolean,
-  onNavigate: (String) -> Unit,
+  onNavigate: (String, SearchEngine?) -> Unit,
   onQueryChange: (String) -> Unit,
+  onSelectSearchEngine: (SearchEngine) -> Unit,
+  onCycleSearchEngine: (Int) -> Unit,
   onBack: () -> Unit,
   onForward: () -> Unit,
   onReloadOrStop: () -> Unit,
+  onHardReload: () -> Unit,
   onHome: () -> Unit,
+  onNewPrivateTab: () -> Unit,
   onOpenSecuritySheet: () -> Unit,
   onOpenVpnSheet: () -> Unit,
   onOpenMediaHub: () -> Unit,
   onOpenTabs: () -> Unit,
   onOpenMenu: () -> Unit,
+  onOpenOmniSearch: (String) -> Unit,
   onRequestExit: () -> Unit,
+  onShowToast: (String) -> Unit = {},
   onSwipeLeft: () -> Unit = {},
   onSwipeRight: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val voltColors = LocalVoltColors.current
+  val context = LocalContext.current
   val focusManager = LocalFocusManager.current
+  val haptics = LocalHapticFeedback.current
+  val clipboard = LocalClipboardManager.current
+
   var isFocused by remember { mutableStateOf(false) }
+  var isEngineTrayOpen by remember { mutableStateOf(false) }
+  var swipeDirection by remember { mutableIntStateOf(1) }
   var inputText by remember(tab.id, tab.url, tab.isSpeedDial) {
     mutableStateOf(if (tab.isSpeedDial) "" else tab.url)
   }
 
   val latestOnSwipeLeft by rememberUpdatedState(onSwipeLeft)
   val latestOnSwipeRight by rememberUpdatedState(onSwipeRight)
+  val latestOnCycleEngine by rememberUpdatedState(onCycleSearchEngine)
+  val latestOnOpenTabs by rememberUpdatedState(onOpenTabs)
+  val latestIsFocused by rememberUpdatedState(isFocused)
+
+  // Live local bang detection (e.g. "!w kotlin" -> previews Wikipedia badge without network calls)
+  val bangPreview = remember(inputText) { VoltSpeedEngine.detectBangShortcut(inputText)?.first }
+  val isOmniBangActive =
+    remember(inputText) {
+      val low = inputText.trim().lowercase()
+      low.startsWith("!omni") || low.startsWith("/omni") || low.startsWith("!!")
+    }
+  val effectiveEngine = bangPreview ?: searchEngine
+
+  // Check clipboard MIME type only (does NOT call getPrimaryClip() so Android 12+ shows no paste toast)
+  val hasClipboardText =
+    remember(isFocused) {
+      if (!isFocused) {
+        false
+      } else {
+        runCatching {
+          val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+          val desc = cm?.primaryClipDescription
+          cm?.hasPrimaryClip() == true &&
+            (desc?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true ||
+              desc?.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML) == true)
+        }.getOrDefault(false)
+      }
+    }
 
   LaunchedEffect(tab.url, tab.isSpeedDial) {
     if (!isFocused) {
@@ -109,12 +175,77 @@ fun OmniboxDock(
     }
   }
 
+  val showQuickBar = isFocused || isEngineTrayOpen
+
   Surface(
     modifier = modifier.fillMaxWidth(),
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 6.dp,
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
+      // On phone bottom dock, expand the Firefox-style engine & smart-action tray right ABOVE the address bar
+      if (showBottomNavControls) {
+        AnimatedVisibility(visible = showQuickBar) {
+          OmniboxQuickBar(
+            activeEngine = searchEngine,
+            previewEngine = bangPreview,
+            isOmniBangActive = isOmniBangActive,
+            isFocused = isFocused,
+            inputText = inputText,
+            currentTabUrl = tab.url,
+            isSpeedDial = tab.isSpeedDial,
+            hasClipboardText = hasClipboardText,
+            onSelectEngine = { chosen ->
+              val q = inputText.trim()
+              onSelectSearchEngine(chosen)
+              if (isFocused && q.isNotEmpty() && q != tab.url.trim()) {
+                isFocused = false
+                isEngineTrayOpen = false
+                focusManager.clearFocus()
+                onNavigate(q, chosen)
+              } else {
+                isEngineTrayOpen = false
+              }
+            },
+            onLongPressSetDefault = { chosen ->
+              onSelectSearchEngine(chosen)
+              onShowToast("Default search: ${chosen.displayName}")
+            },
+            onLaunchOmniSearch = {
+              val q =
+                VoltSpeedEngine.extractOmniBangQuery(inputText)
+                  ?: inputText.trim().takeUnless { it == tab.url.trim() }.orEmpty()
+              isFocused = false
+              isEngineTrayOpen = false
+              focusManager.clearFocus()
+              onOpenOmniSearch(q)
+            },
+            onPasteAndGo = {
+              val clip = clipboard.getText()?.text?.trim().orEmpty()
+              if (clip.isNotEmpty()) {
+                isFocused = false
+                isEngineTrayOpen = false
+                focusManager.clearFocus()
+                onNavigate(clip, null)
+              } else {
+                onShowToast("Clipboard is empty")
+              }
+            },
+            onInjectText = { next ->
+              inputText = next
+              onQueryChange(next)
+            },
+            onCopyCurrentUrl = {
+              if (tab.url.isNotBlank()) {
+                clipboard.setText(AnnotatedString(tab.url))
+                onShowToast("Page URL copied")
+              }
+            },
+            onCloseTray = { isEngineTrayOpen = false },
+          )
+        }
+      }
+
       // Hairline loading indicator
       if (tab.isLoading) {
         LinearProgressIndicator(
@@ -190,39 +321,154 @@ fun OmniboxDock(
           }
         }
 
-        // Address Input Pill (extended width)
-        val omniboxShape = RoundedCornerShape(22.dp)
+        // Address Input Pill with Inline Swipeable Firefox-Style Search Engine Selector
+        val omniboxShape = RoundedCornerShape(24.dp)
+        val engineAccent = effectiveEngine.badgeAccentColor(voltColors.isLightTheme)
         val omniboxBorderColor =
-          if (isFocused) voltColors.cyanAccent
-          else MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+          when {
+            isFocused -> engineAccent.copy(alpha = 0.85f)
+            isEngineTrayOpen -> voltColors.cyanAccent
+            else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+          }
         Row(
           modifier =
             Modifier.weight(1f)
-              .height(44.dp)
+              .heightIn(min = 48.dp)
               .clip(omniboxShape)
               .background(voltColors.omniboxSurface)
               .border(
-                width = if (isFocused) 1.3.dp else 1.dp,
+                width = if (isFocused || isEngineTrayOpen) 1.3.dp else 1.dp,
                 color = omniboxBorderColor,
                 shape = omniboxShape,
               )
-              .padding(horizontal = 10.dp),
+              .pointerInput(Unit) {
+                var sumX = 0f
+                var sumY = 0f
+                detectDragGestures(
+                  onDragStart = {
+                    sumX = 0f
+                    sumY = 0f
+                  },
+                  onDrag = { change, dragAmount ->
+                    if (!latestIsFocused) {
+                      change.consume()
+                      sumX += dragAmount.x
+                      sumY += dragAmount.y
+                    }
+                  },
+                  onDragEnd = {
+                    if (latestIsFocused) return@detectDragGestures
+                    if (abs(sumX) > abs(sumY) && abs(sumX) > 42f) {
+                      val step = if (sumX < 0f) 1 else -1
+                      swipeDirection = step
+                      haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                      latestOnCycleEngine(step)
+                    } else if (sumY < -44f && abs(sumY) > abs(sumX)) {
+                      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                      latestOnOpenTabs()
+                    }
+                  },
+                )
+              }
+              .padding(start = 4.dp, end = 4.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          if (!isFocused && tab.isSpeedDial) {
-            Icon(
-              imageVector = Icons.Default.Search,
-              contentDescription = null,
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(16.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+          // Inline Search Engine Pill (Tap = open strip, Swipe L/R = cycle engine anytime!)
+          Box(
+            modifier =
+              Modifier.minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(100.dp))
+                .pointerInput(Unit) {
+                  var dragSum = 0f
+                  detectHorizontalDragGestures(
+                    onDragStart = { dragSum = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                      change.consume()
+                      dragSum += dragAmount
+                    },
+                    onDragEnd = {
+                      if (abs(dragSum) > 26f) {
+                        val step = if (dragSum < 0f) 1 else -1
+                        swipeDirection = step
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        latestOnCycleEngine(step)
+                      }
+                    },
+                  )
+                }
+                .combinedClickable(
+                  onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    isEngineTrayOpen = !isEngineTrayOpen
+                  },
+                  onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    swipeDirection = 1
+                    latestOnCycleEngine(1)
+                  },
+                )
+                .padding(horizontal = 4.dp, vertical = 4.dp)
+                .testTag("omnibox_search_engine_button"),
+            contentAlignment = Alignment.Center,
+          ) {
+            AnimatedContent(
+              targetState = if (isOmniBangActive) null else effectiveEngine,
+              transitionSpec = {
+                val dir = swipeDirection
+                (slideInHorizontally { width -> dir * width / 2 } + fadeIn()) togetherWith
+                  (slideOutHorizontally { width -> -dir * width / 2 } + fadeOut())
+              },
+              label = "omnibox_engine_badge",
+            ) { targetEngine ->
+              val badgeText = targetEngine?.badgeCode ?: "ALL"
+              val badgeColor = targetEngine?.badgeAccentColor(voltColors.isLightTheme) ?: voltColors.cyanAccent
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier =
+                  Modifier.clip(RoundedCornerShape(100.dp))
+                    .background(badgeColor.copy(alpha = 0.16f))
+                    .border(1.dp, badgeColor.copy(alpha = 0.55f), RoundedCornerShape(100.dp))
+                    .padding(start = 6.dp, top = 4.dp, end = 3.dp, bottom = 4.dp),
+              ) {
+                Box(
+                  modifier = Modifier.size(6.dp).clip(CircleShape).background(badgeColor)
+                )
+                Text(
+                  text = badgeText,
+                  style =
+                    MaterialTheme.typography.labelSmall.copy(
+                      fontSize = 10.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      letterSpacing = (-0.2).sp,
+                    ),
+                  color = badgeColor,
+                  maxLines = 1,
+                  softWrap = false,
+                )
+                Icon(
+                  imageVector =
+                    if (isEngineTrayOpen) Icons.Default.KeyboardArrowUp
+                    else Icons.Default.KeyboardArrowDown,
+                  contentDescription =
+                    stringResource(
+                      R.string.cd_search_engine_selector,
+                      targetEngine?.displayName ?: "Omni-Search",
+                    ),
+                  tint = badgeColor,
+                  modifier = Modifier.size(13.dp),
+                )
+              }
+            }
           }
 
-          Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+          Box(
+            modifier = Modifier.weight(1f).padding(start = 2.dp),
+            contentAlignment = Alignment.CenterStart,
+          ) {
             if (inputText.isEmpty()) {
               Text(
-                text = stringResource(R.string.omnibox_placeholder),
+                text = "Search ${effectiveEngine.shortLabel} or enter URL",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -240,7 +486,7 @@ fun OmniboxDock(
                 MaterialTheme.typography.bodyMedium.copy(
                   color = MaterialTheme.colorScheme.onSurface
                 ),
-              cursorBrush = SolidColor(voltColors.cyanAccent),
+              cursorBrush = SolidColor(engineAccent),
               keyboardOptions =
                 KeyboardOptions(
                   keyboardType = KeyboardType.Uri,
@@ -250,8 +496,9 @@ fun OmniboxDock(
                 KeyboardActions(
                   onGo = {
                     isFocused = false
+                    isEngineTrayOpen = false
                     focusManager.clearFocus()
-                    onNavigate(inputText)
+                    onNavigate(inputText, null)
                   }
                 ),
               modifier =
@@ -271,7 +518,7 @@ fun OmniboxDock(
           if (isFocused && inputText.isNotEmpty()) {
             IconButton(
               onClick = { inputText = "" },
-              modifier = Modifier.size(32.dp).testTag("omnibox_clear_button"),
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("omnibox_clear_button"),
             ) {
               Icon(
                 imageVector = Icons.Default.Close,
@@ -280,10 +527,36 @@ fun OmniboxDock(
                 modifier = Modifier.size(16.dp),
               )
             }
-          } else if (!tab.isSpeedDial) {
             IconButton(
-              onClick = onReloadOrStop,
-              modifier = Modifier.size(32.dp).testTag("omnibox_reload_button"),
+              onClick = {
+                isFocused = false
+                isEngineTrayOpen = false
+                focusManager.clearFocus()
+                onNavigate(inputText, null)
+              },
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("omnibox_go_button"),
+            ) {
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = stringResource(R.string.cd_omnibox_go),
+                tint = engineAccent,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+          } else if (!tab.isSpeedDial) {
+            Box(
+              modifier =
+                Modifier.minimumInteractiveComponentSize()
+                  .clip(CircleShape)
+                  .combinedClickable(
+                    onClick = onReloadOrStop,
+                    onLongClick = {
+                      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                      onHardReload()
+                    },
+                  )
+                  .testTag("omnibox_reload_button"),
+              contentAlignment = Alignment.Center,
             ) {
               Icon(
                 imageVector = if (tab.isLoading) Icons.Default.Close else Icons.Default.Refresh,
@@ -305,7 +578,7 @@ fun OmniboxDock(
             if (hasSniffedMedia) voltColors.amberAccent.copy(alpha = 0.22f)
             else MaterialTheme.colorScheme.surfaceContainerHigh,
           border =
-            if (hasSniffedMedia) androidx.compose.foundation.BorderStroke(1.dp, voltColors.amberAccent)
+            if (hasSniffedMedia) BorderStroke(1.dp, voltColors.amberAccent)
             else null,
           modifier =
             Modifier.minimumInteractiveComponentSize()
@@ -334,6 +607,69 @@ fun OmniboxDock(
               )
             }
           }
+        }
+      }
+
+      // On wide-screen top dock, expand the engine & smart-action tray right BELOW the address bar
+      if (!showBottomNavControls) {
+        AnimatedVisibility(visible = showQuickBar) {
+          OmniboxQuickBar(
+            activeEngine = searchEngine,
+            previewEngine = bangPreview,
+            isOmniBangActive = isOmniBangActive,
+            isFocused = isFocused,
+            inputText = inputText,
+            currentTabUrl = tab.url,
+            isSpeedDial = tab.isSpeedDial,
+            hasClipboardText = hasClipboardText,
+            onSelectEngine = { chosen ->
+              val q = inputText.trim()
+              onSelectSearchEngine(chosen)
+              if (isFocused && q.isNotEmpty() && q != tab.url.trim()) {
+                isFocused = false
+                isEngineTrayOpen = false
+                focusManager.clearFocus()
+                onNavigate(q, chosen)
+              } else {
+                isEngineTrayOpen = false
+              }
+            },
+            onLongPressSetDefault = { chosen ->
+              onSelectSearchEngine(chosen)
+              onShowToast("Default search: ${chosen.displayName}")
+            },
+            onLaunchOmniSearch = {
+              val q =
+                VoltSpeedEngine.extractOmniBangQuery(inputText)
+                  ?: inputText.trim().takeUnless { it == tab.url.trim() }.orEmpty()
+              isFocused = false
+              isEngineTrayOpen = false
+              focusManager.clearFocus()
+              onOpenOmniSearch(q)
+            },
+            onPasteAndGo = {
+              val clip = clipboard.getText()?.text?.trim().orEmpty()
+              if (clip.isNotEmpty()) {
+                isFocused = false
+                isEngineTrayOpen = false
+                focusManager.clearFocus()
+                onNavigate(clip, null)
+              } else {
+                onShowToast("Clipboard is empty")
+              }
+            },
+            onInjectText = { next ->
+              inputText = next
+              onQueryChange(next)
+            },
+            onCopyCurrentUrl = {
+              if (tab.url.isNotBlank()) {
+                clipboard.setText(AnnotatedString(tab.url))
+                onShowToast("Page URL copied")
+              }
+            },
+            onCloseTray = { isEngineTrayOpen = false },
+          )
         }
       }
 
@@ -371,9 +707,21 @@ fun OmniboxDock(
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
             )
           }
-          IconButton(
-            onClick = onHome,
-            modifier = Modifier.weight(1f).testTag("nav_home_button"),
+          // Home (Tap = Speed Dial Home, Long-press = Instant New Private Tab)
+          Box(
+            modifier =
+              Modifier.weight(1f)
+                .minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(10.dp))
+                .combinedClickable(
+                  onClick = onHome,
+                  onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onNewPrivateTab()
+                  },
+                )
+                .testTag("nav_home_button"),
+            contentAlignment = Alignment.Center,
           ) {
             Icon(
               imageVector = Icons.Default.Home,
@@ -480,8 +828,8 @@ fun OmniboxDock(
               Text(
                 text = "DATA",
                 style = MaterialTheme.typography.labelSmall.copy(
-                  fontSize = androidx.compose.ui.unit.TextUnit(8f, androidx.compose.ui.unit.TextUnitType.Sp),
-                  lineHeight = androidx.compose.ui.unit.TextUnit(9f, androidx.compose.ui.unit.TextUnitType.Sp),
+                  fontSize = 10.sp,
+                  lineHeight = 11.sp,
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

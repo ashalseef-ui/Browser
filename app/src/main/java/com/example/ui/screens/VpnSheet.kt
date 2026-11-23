@@ -56,6 +56,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -351,7 +352,7 @@ fun FreePublicVpnSheet(
               }
               IconButton(
                 onClick = { showWireGuardDetails = !showWireGuardDetails },
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.minimumInteractiveComponentSize(),
               ) {
                 Icon(
                   imageVector = if (showWireGuardDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -583,7 +584,7 @@ fun FreePublicVpnSheet(
               }
               IconButton(
                 onClick = { showProxyDetails = !showProxyDetails },
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.minimumInteractiveComponentSize(),
               ) {
                 Icon(
                   imageVector = if (showProxyDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -918,7 +919,7 @@ fun FreePublicVpnSheet(
               }
               IconButton(
                 onClick = { showDnsDetails = !showDnsDetails },
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.minimumInteractiveComponentSize(),
               ) {
                 Icon(
                   imageVector = if (showDnsDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -1039,7 +1040,7 @@ private fun FilterChipPill(
         width = 1.dp,
         color = if (selected) accentColor else voltColors.cardBorder,
       ),
-    modifier = Modifier.clip(RoundedCornerShape(100.dp)).clickable(onClick = onClick),
+    modifier = Modifier.minimumInteractiveComponentSize().clip(RoundedCornerShape(100.dp)).clickable(onClick = onClick),
   ) {
     Text(
       text = label,

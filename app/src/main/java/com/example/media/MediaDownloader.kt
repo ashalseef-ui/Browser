@@ -3,6 +3,7 @@ package com.example.media
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Context
@@ -20,12 +21,19 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.Clock
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultDecoderFactory
+import androidx.media3.transformer.ExoPlayerAssetLoader
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import com.example.MainActivity
 import com.example.R
 import com.example.browser.MediaSniffer
 import com.example.browser.PlaylistResolver
@@ -39,12 +47,14 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -212,6 +222,8 @@ class MediaDownloader(
             if (exported) "Saved to Downloads/VoltBrowser/${targetFile.name}"
             else "Saved inside Volt Browser (use Save As to export)",
           ongoing = false,
+          targetFile = targetFile,
+          mimeType = resolvedMime,
         )
       } catch (_: Exception) {
         repository.updateDownloadProgress(
@@ -304,6 +316,7 @@ class MediaDownloader(
       body.byteStream().use { input ->
         FileOutputStream(targetFile).use { output ->
           while (true) {
+            coroutineContext.ensureActive()
             val read = input.read(buffer)
             if (read == -1) break
             output.write(buffer, 0, read)
@@ -351,6 +364,8 @@ class MediaDownloader(
           if (exportedToPublic) "Saved to Downloads/VoltBrowser/${targetFile.name}"
           else "Saved inside Volt Browser (use Save As to export)",
         ongoing = false,
+        targetFile = targetFile,
+        mimeType = resolvedFinalMime,
       )
     }
   }
@@ -381,7 +396,7 @@ class MediaDownloader(
     }
 
     // Best-practice Media3 Transformer remux/export into a clean seekable .mp4 file
-    val remuxedOk = exportWithMedia3Transformer(id, playlistUrl, isHls, targetFile)
+    val remuxedOk = exportWithMedia3Transformer(id, playlistUrl, isHls, targetFile, referer)
     if (remuxedOk && targetFile.exists() && targetFile.length() > 0L) {
       val size = targetFile.length()
       val exportedToPublic =
@@ -400,6 +415,8 @@ class MediaDownloader(
           if (exportedToPublic) "Saved to Downloads/VoltBrowser/${targetFile.name}"
           else "Saved inside Volt Browser (use Save As to export)",
         ongoing = false,
+        targetFile = targetFile,
+        mimeType = "video/mp4",
       )
       return
     }
@@ -420,6 +437,7 @@ class MediaDownloader(
     streamUrl: String,
     isHls: Boolean,
     targetFile: File,
+    referer: String?,
   ): Boolean =
     withContext(Dispatchers.Main) {
       val mediaItem =
@@ -427,6 +445,51 @@ class MediaDownloader(
           .setUri(streamUrl)
           .setMimeType(if (isHls) "application/x-mpegURL" else "application/dash+xml")
           .build()
+
+      val validReferer =
+        referer?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+      val originHeader =
+        validReferer?.let { ref ->
+          runCatching {
+            val u = URI(ref)
+            if (!u.scheme.isNullOrBlank() && !u.authority.isNullOrBlank()) {
+              "${u.scheme}://${u.authority}"
+            } else null
+          }.getOrNull()
+        }
+
+      val mediaOkHttp =
+        okHttpClient
+          .newBuilder()
+          .addInterceptor { chain ->
+            val orig = chain.request()
+            val builder = orig.newBuilder().header("Accept", "*/*")
+            if (validReferer != null && orig.header("Referer") == null) {
+              builder.header("Referer", validReferer)
+            }
+            if (originHeader != null && orig.header("Origin") == null) {
+              builder.header("Origin", originHeader)
+            }
+            if (orig.header("Cookie") == null) {
+              MediaSniffer.getCookiesForUrl(orig.url.toString())?.let { cookie ->
+                builder.header("Cookie", cookie)
+              }
+            }
+            chain.proceed(builder.build())
+          }
+          .build()
+
+      val httpFactory =
+        OkHttpDataSource.Factory(mediaOkHttp)
+          .setUserAgent(MediaSniffer.DEFAULT_BROWSER_USER_AGENT)
+      val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+      val assetLoaderFactory =
+        ExoPlayerAssetLoader.Factory(
+          context,
+          DefaultDecoderFactory.Builder(context).build(),
+          Clock.DEFAULT,
+          DefaultMediaSourceFactory(context).setDataSourceFactory(dataSourceFactory),
+        )
 
       var progressPoller: Job? = null
       val success =
@@ -453,6 +516,7 @@ class MediaDownloader(
           try {
             val instance =
               Transformer.Builder(context)
+                .setAssetLoaderFactory(assetLoaderFactory)
                 .addListener(listener)
                 .build()
             transformer = instance
@@ -545,6 +609,7 @@ class MediaDownloader(
       }
 
       stats.segmentUrls.forEachIndexed { index, segUrl ->
+        coroutineContext.ensureActive()
         val segBytes = fetchBytes(segUrl, referer)
         if (segBytes != null) {
           output.write(segBytes)
@@ -584,6 +649,8 @@ class MediaDownloader(
         if (exportedToPublic) "Saved to Downloads/VoltBrowser/${finalTargetFile.name}"
         else "Saved inside Volt Browser (use Save As to export)",
       ongoing = false,
+      targetFile = finalTargetFile,
+      mimeType = finalMime,
     )
   }
 
@@ -596,7 +663,7 @@ class MediaDownloader(
     val lines = playlistText.lines()
     var bestBandwidth = -1L
     var bestUri: String? = null
-    val base = URI(masterUrl)
+    val base = runCatching { URI(masterUrl) }.getOrNull() ?: return masterUrl
 
     for (i in lines.indices) {
       val line = lines[i].trim()
@@ -609,8 +676,11 @@ class MediaDownloader(
             ?.toLongOrNull() ?: 0L
         val nextLine = lines.drop(i + 1).firstOrNull { it.trim().isNotEmpty() && !it.trim().startsWith("#") }?.trim()
         if (nextLine != null && bw >= bestBandwidth) {
-          bestBandwidth = bw
-          bestUri = base.resolve(nextLine).toString()
+          val resolved = runCatching { base.resolve(nextLine).toString() }.getOrNull()
+          if (resolved != null) {
+            bestBandwidth = bw
+            bestUri = resolved
+          }
         }
       }
     }
@@ -743,6 +813,8 @@ class MediaDownloader(
     title: String,
     message: String,
     ongoing: Boolean,
+    targetFile: File? = null,
+    mimeType: String? = null,
   ) {
     if (
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -763,11 +835,39 @@ class MediaDownloader(
           )
         manager.createNotificationChannel(channel)
       }
+      val contentIntent =
+        if (!ongoing && targetFile != null && targetFile.exists()) {
+          runCatching {
+            val fileUri =
+              FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
+            val viewIntent =
+              Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(fileUri, resolveMimeType(targetFile.name, mimeType))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+              }
+            PendingIntent.getActivity(
+              context,
+              5000 + id.toInt(),
+              viewIntent,
+              PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+          }.getOrNull()
+        } else {
+          null
+        } ?: PendingIntent.getActivity(
+          context,
+          5000 + id.toInt(),
+          Intent(context, MainActivity::class.java),
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
       val notification =
         NotificationCompat.Builder(context, channelId)
-          .setSmallIcon(R.drawable.ic_launcher_foreground)
+          .setSmallIcon(R.drawable.ic_volt_stat)
           .setContentTitle(title)
           .setContentText(message)
+          .setContentIntent(contentIntent)
           .setOngoing(ongoing)
           .setAutoCancel(!ongoing)
           .build()
@@ -941,8 +1041,11 @@ class MediaDownloader(
       return "${base.ifBlank { "volt_file" }}.$ext"
     }
 
+    const val MAX_DATA_URL_BYTES = 25 * 1024 * 1024
+
     fun parseDataUrl(dataUrl: String): DecodedDataUrl? {
       if (!dataUrl.startsWith("data:", ignoreCase = true)) return null
+      if (dataUrl.length > 36_000_000) return null
       val commaIdx = dataUrl.indexOf(',')
       if (commaIdx <= 4 || commaIdx >= dataUrl.length) return null
       val header = dataUrl.substring(5, commaIdx)
@@ -958,7 +1061,7 @@ class MediaDownloader(
             URLDecoder.decode(payload, "UTF-8").toByteArray(StandardCharsets.UTF_8)
           }
         }.getOrNull() ?: return null
-      if (bytes.isEmpty()) return null
+      if (bytes.isEmpty() || bytes.size > MAX_DATA_URL_BYTES) return null
       return DecodedDataUrl(bytes = bytes, mimeType = mime)
     }
   }

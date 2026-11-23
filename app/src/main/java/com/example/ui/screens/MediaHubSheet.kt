@@ -69,6 +69,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -212,7 +213,8 @@ fun MediaHubSheet(
               shape = RoundedCornerShape(100.dp),
               color = voltColors.emeraldShield.copy(alpha = 0.14f),
               modifier =
-                Modifier.clip(RoundedCornerShape(100.dp))
+                Modifier.minimumInteractiveComponentSize()
+                  .clip(RoundedCornerShape(100.dp))
                   .clickable(onClick = onRequerySizes)
                   .testTag("requery_sizes_button"),
             ) {
@@ -239,7 +241,8 @@ fun MediaHubSheet(
             shape = RoundedCornerShape(100.dp),
             color = voltColors.cyanAccent.copy(alpha = 0.14f),
             modifier =
-              Modifier.clip(RoundedCornerShape(100.dp))
+              Modifier.minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(100.dp))
                 .clickable(onClick = onRescanPage)
                 .testTag("rescan_media_button"),
           ) {
@@ -456,7 +459,7 @@ fun MediaHubSheet(
                         shape = RoundedCornerShape(8.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
                         modifier =
-                          Modifier.size(32.dp)
+                          Modifier.minimumInteractiveComponentSize()
                             .clip(RoundedCornerShape(8.dp))
                             .clickable {
                               clipboard.setText(AnnotatedString(item.url))
@@ -1015,7 +1018,7 @@ private fun CompactMediaPillButton(
   Surface(
     shape = RoundedCornerShape(10.dp),
     color = containerColor,
-    modifier = modifier.height(34.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
+    modifier = modifier.minimumInteractiveComponentSize().heightIn(min = 42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
   ) {
     Row(
       modifier = Modifier.padding(horizontal = 8.dp),

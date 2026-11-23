@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -116,7 +117,7 @@ fun SpeedDialHome(
                 else MaterialTheme.colorScheme.surfaceContainer
             ),
         ) {
-          Box(modifier = Modifier.fillMaxWidth().height(168.dp)) {
+          Box(modifier = Modifier.fillMaxWidth().heightIn(min = 168.dp)) {
             if (!isZenLight) {
               Image(
                 painter = painterResource(id = R.drawable.img_speed_dial_hero),
@@ -227,7 +228,8 @@ fun SpeedDialHome(
                     else voltColors.pillSurface,
                   border = BorderStroke(1.dp, blockerTint.copy(alpha = 0.55f)),
                   modifier =
-                    Modifier.clip(pillShape)
+                    Modifier.minimumInteractiveComponentSize()
+                      .clip(pillShape)
                       .clickable(onClick = onOpenSecuritySheet)
                       .testTag("speed_dial_blocker_badge"),
                 ) {
@@ -383,7 +385,8 @@ fun SpeedDialHome(
               color = voltColors.cyanAccent.copy(alpha = 0.14f),
               border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.45f)),
               modifier =
-                Modifier.clip(pillShape)
+                Modifier.minimumInteractiveComponentSize()
+                  .clip(pillShape)
                   .clickable(onClick = onAddSpeedDialClick)
                   .testTag("add_speed_dial_button"),
             ) {

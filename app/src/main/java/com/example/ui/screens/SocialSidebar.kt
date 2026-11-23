@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -281,7 +282,7 @@ fun SocialSidebarOverlay(
             Row(verticalAlignment = Alignment.CenterVertically) {
               IconButton(
                 onClick = { isDockedRight = !isDockedRight },
-                modifier = Modifier.size(36.dp).testTag("social_sidebar_swap_side_button"),
+                modifier = Modifier.minimumInteractiveComponentSize().testTag("social_sidebar_swap_side_button"),
               ) {
                 Icon(
                   imageVector = Icons.Default.SwapHoriz,
@@ -292,7 +293,7 @@ fun SocialSidebarOverlay(
               }
               IconButton(
                 onClick = onDismiss,
-                modifier = Modifier.size(36.dp).testTag("social_sidebar_close_button"),
+                modifier = Modifier.minimumInteractiveComponentSize().testTag("social_sidebar_close_button"),
               ) {
                 Icon(
                   imageVector = Icons.Default.Close,
@@ -362,7 +363,7 @@ fun SocialSidebarOverlay(
 
                 Button(
                   onClick = { onOpenInBrowser(app) },
-                  modifier = Modifier.fillMaxWidth().height(42.dp).testTag("social_open_${app.id}_button"),
+                  modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_open_${app.id}_button"),
                   contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                   colors =
                     ButtonDefaults.buttonColors(
@@ -377,7 +378,7 @@ fun SocialSidebarOverlay(
                   OutlinedButton(
                     onClick = { onLaunchInstalledApp(app) },
                     modifier =
-                      Modifier.fillMaxWidth().height(40.dp).testTag("social_app_${app.id}_button"),
+                      Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_app_${app.id}_button"),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                   ) {
                     Icon(
@@ -441,7 +442,7 @@ fun SocialSidebarOverlay(
 
               Button(
                 onClick = onTriggerAutofill,
-                modifier = Modifier.fillMaxWidth().height(44.dp).testTag("social_autofill_button"),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_autofill_button"),
                 colors =
                   ButtonDefaults.buttonColors(
                     containerColor = voltColors.cyanAccent,
@@ -459,7 +460,7 @@ fun SocialSidebarOverlay(
 
               OutlinedButton(
                 onClick = onOpenAutofillSettings,
-                modifier = Modifier.fillMaxWidth().height(40.dp).testTag("social_autofill_settings_button"),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_autofill_settings_button"),
               ) {
                 Icon(
                   imageVector = Icons.Default.Settings,

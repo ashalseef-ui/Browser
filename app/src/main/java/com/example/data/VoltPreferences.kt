@@ -70,8 +70,8 @@ class VoltPreferences(private val context: Context) {
         desktopModeEnabled = prefs[Keys.DESKTOP_MODE] ?: false,
         autoWireGuardOnLaunchEnabled = prefs[Keys.AUTO_WIREGUARD_ON_LAUNCH] ?: false,
         preferredWireGuardMode = wgMode,
-        savedWarpConf = prefs[Keys.SAVED_WARP_CONF].orEmpty(),
-        savedCustomWgConf = prefs[Keys.SAVED_CUSTOM_WG_CONF].orEmpty(),
+        savedWarpConf = SecureConfigCipher.decrypt(prefs[Keys.SAVED_WARP_CONF].orEmpty()),
+        savedCustomWgConf = SecureConfigCipher.decrypt(prefs[Keys.SAVED_CUSTOM_WG_CONF].orEmpty()),
         savedCustomWgName = prefs[Keys.SAVED_CUSTOM_WG_NAME].orEmpty(),
         autoProxyOnLaunchEnabled = prefs[Keys.AUTO_PROXY_ON_LAUNCH] ?: false,
         autoProxyFailoverEnabled = prefs[Keys.AUTO_PROXY_FAILOVER] ?: true,
@@ -118,15 +118,17 @@ class VoltPreferences(private val context: Context) {
   }
 
   suspend fun saveWarpConfig(confText: String) {
+    val encrypted = SecureConfigCipher.encrypt(confText)
     context.voltDataStore.edit {
-      it[Keys.SAVED_WARP_CONF] = confText
+      it[Keys.SAVED_WARP_CONF] = encrypted
       it[Keys.PREFERRED_WG_MODE] = WireGuardMode.WARP_FREE.name
     }
   }
 
   suspend fun saveCustomWireGuardConfig(confText: String, profileName: String) {
+    val encrypted = SecureConfigCipher.encrypt(confText)
     context.voltDataStore.edit {
-      it[Keys.SAVED_CUSTOM_WG_CONF] = confText
+      it[Keys.SAVED_CUSTOM_WG_CONF] = encrypted
       it[Keys.SAVED_CUSTOM_WG_NAME] = profileName
       it[Keys.PREFERRED_WG_MODE] = WireGuardMode.CUSTOM_CONF.name
     }
