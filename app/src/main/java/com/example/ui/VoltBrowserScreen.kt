@@ -10,7 +10,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -54,6 +57,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,15 +65,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.ui.components.OmniboxDock
@@ -80,9 +89,13 @@ import com.example.ui.screens.LibrarySettingsSheet
 import com.example.ui.screens.MediaHubSheet
 import com.example.ui.screens.MediaPlayerOverlay
 import com.example.ui.screens.MiniMediaPlayerBar
+import com.example.ui.screens.OmniSearchDialog
 import com.example.ui.screens.SecurityTelemetrySheet
+import com.example.ui.screens.SocialSidebarOverlay
 import com.example.ui.screens.SpeedDialHome
+import com.example.data.WebContextMenuTarget
 import com.example.ui.screens.TabSwitcherOverlay
+import com.example.ui.screens.WebContextMenuSheet
 import com.example.ui.theme.LocalVoltColors
 
 @Composable
@@ -104,22 +117,63 @@ fun VoltBrowserScreen(
   val activeSheet by viewModel.activeSheet.collectAsStateWithLifecycle()
   val findInPageVisible by viewModel.findInPageVisible.collectAsStateWithLifecycle()
   val fullscreenCustomView by viewModel.fullscreenCustomView.collectAsStateWithLifecycle()
+  val isBrowserFullscreen by viewModel.isBrowserFullscreen.collectAsStateWithLifecycle()
+  val contextMenuTarget by viewModel.contextMenuTarget.collectAsStateWithLifecycle()
   val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
   val mediaState by viewModel.mediaPlayerState.collectAsStateWithLifecycle()
   val mediaController by viewModel.mediaManager.controllerFlow.collectAsStateWithLifecycle()
   val vpnState by viewModel.vpnState.collectAsStateWithLifecycle()
+  val sessionDataUsedBytes by viewModel.sessionDataUsedBytes.collectAsStateWithLifecycle()
+  val socialSidebarOpen by viewModel.socialSidebarOpen.collectAsStateWithLifecycle()
+  val socialApps by viewModel.socialApps.collectAsStateWithLifecycle()
+  val hasSystemAutofill by viewModel.hasSystemAutofill.collectAsStateWithLifecycle()
+
+  val isMediaOverlayFullscreen = mediaState.isVisible && !mediaState.isMinimized && !isInPipMode
+  val isAnyFullscreen = fullscreenCustomView != null || isBrowserFullscreen || isMediaOverlayFullscreen
+  val view = LocalView.current
+
+  LaunchedEffect(isAnyFullscreen) {
+    val window = (context as? Activity)?.window ?: return@LaunchedEffect
+    val controller = WindowCompat.getInsetsController(window, view)
+    if (isAnyFullscreen) {
+      controller.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+      controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+  }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      val window = (context as? Activity)?.window ?: return@onDispose
+      WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.systemBars())
+    }
+  }
 
   val snackbarHostState = remember { SnackbarHostState() }
   var isErasingOnExit by remember { mutableStateOf(false) }
 
+  var pendingVpnAction by remember { mutableStateOf<(() -> Unit)?>(null) }
   val vpnConsentLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
       if (result.resultCode == Activity.RESULT_OK) {
-        viewModel.startDnsVpnService()
+        pendingVpnAction?.invoke()
       } else {
-        viewModel.showMessage("VPN permission is required to enable the Encrypted DNS tunnel")
+        viewModel.showMessage("VPN permission is required to enable the encrypted tunnel")
       }
+      pendingVpnAction = null
     }
+
+  val runWithVpnConsent: (() -> Unit) -> Unit = { action ->
+    val consentIntent = viewModel.prepareVpnConsentIntent()
+    if (consentIntent != null) {
+      pendingVpnAction = action
+      vpnConsentLauncher.launch(consentIntent)
+    } else {
+      action()
+    }
+  }
 
   // Contextual notification permission request when starting media playback on Android 13+
   var askedNotificationPermission by remember { mutableStateOf(false) }
@@ -152,15 +206,21 @@ fun VoltBrowserScreen(
   // Hierarchical Back Navigation
   BackHandler(
     enabled =
-      fullscreenCustomView != null ||
+      contextMenuTarget != null ||
+        fullscreenCustomView != null ||
+        isBrowserFullscreen ||
         (mediaState.isVisible && !mediaState.isMinimized) ||
+        socialSidebarOpen ||
         activeSheet != BrowserSheet.NONE ||
         findInPageVisible ||
         !activeTab.isSpeedDial
   ) {
     when {
+      contextMenuTarget != null -> viewModel.dismissContextMenu()
       fullscreenCustomView != null -> viewModel.exitHtmlFullscreen()
+      isBrowserFullscreen -> viewModel.toggleBrowserFullscreen(false)
       mediaState.isVisible && !mediaState.isMinimized -> viewModel.mediaManager.minimizeToMiniPlayer()
+      socialSidebarOpen -> viewModel.closeSocialSidebar()
       activeSheet != BrowserSheet.NONE -> viewModel.closeSheet()
       findInPageVisible -> viewModel.toggleFindInPage(false)
       else -> viewModel.goBack()
@@ -176,8 +236,8 @@ fun VoltBrowserScreen(
         val isWideScreen = maxWidth >= 600.dp
 
         Row(modifier = Modifier.fillMaxSize()) {
-          // Adaptive Tablet / Foldable NavigationRail
-          if (isWideScreen && !isInPipMode) {
+          // Adaptive Tablet / Foldable NavigationRail (hidden in fullscreen or PiP)
+          if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
             NavigationRail(
               containerColor = MaterialTheme.colorScheme.surface,
               modifier = Modifier.statusBarsPadding().navigationBarsPadding(),
@@ -284,16 +344,17 @@ fun VoltBrowserScreen(
             modifier =
               Modifier.weight(1f)
                 .fillMaxHeight()
-                .statusBarsPadding()
-                .let { if (!isWideScreen) it.navigationBarsPadding().imePadding() else it.navigationBarsPadding() }
+                .let { if (isAnyFullscreen) it else it.statusBarsPadding().navigationBarsPadding() }
+                .let { if (!isWideScreen) it.imePadding() else it }
           ) {
             // Top Omnibox on Wide Screens
-            if (isWideScreen && !isInPipMode) {
+            if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
               OmniboxDock(
                 tab = activeTab,
                 tabCount = tabs.size,
-                turboShieldEnabled = settings.turboShieldEnabled,
+                adBlockerType = settings.adBlockerType,
                 isVpnActive = vpnState.isAnyProtectionActive,
+                sessionDataUsedBytes = sessionDataUsedBytes,
                 showBottomNavControls = false,
                 onNavigate = viewModel::navigate,
                 onQueryChange = viewModel::onOmniboxQueryChanged,
@@ -307,6 +368,8 @@ fun VoltBrowserScreen(
                 onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
                 onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+                onSwipeLeft = viewModel::switchToNextTab,
+                onSwipeRight = viewModel::switchToPreviousTab,
               )
             }
 
@@ -326,15 +389,22 @@ fun VoltBrowserScreen(
                 SpeedDialHome(
                   isIncognito = activeTab.isIncognito,
                   settings = settings,
-                  isVpnActive = vpnState.isAnyProtectionActive,
                   speedDialItems = speedDialItems,
-                  isWideScreen = isWideScreen,
                   onOpenUrl = viewModel::navigate,
                   onPrewarmUrl = viewModel.speedEngine::prewarmOrigin,
-                  onPlayMedia = viewModel::playDetectedMedia,
-                  onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
-                  onOpenVpn = { viewModel.onVpnSheetOpened() },
+                  onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
                   onAddSpeedDialClick = { viewModel.openSheet(BrowserSheet.ADD_SPEED_DIAL) },
+                  onOpenOmniSearch = { viewModel.openSheet(BrowserSheet.OMNI_SEARCH) },
+                  onLongPressTile = { bookmark ->
+                    viewModel.showContextMenu(
+                      WebContextMenuTarget(
+                        pageUrl = "",
+                        linkUrl = bookmark.url,
+                        linkText = bookmark.title,
+                        bookmarkId = bookmark.id,
+                      )
+                    )
+                  },
                 )
               } else {
                 AndroidView(
@@ -361,6 +431,54 @@ fun VoltBrowserScreen(
                   modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
                 )
               }
+
+              if (!isInPipMode) {
+                SocialSidebarOverlay(
+                  isOpen = socialSidebarOpen,
+                  socialApps = socialApps,
+                  hasSystemAutofill = hasSystemAutofill,
+                  onToggleSidebar = viewModel::toggleSocialSidebar,
+                  onDismiss = viewModel::closeSocialSidebar,
+                  onOpenInBrowser = viewModel::openSocialInBrowser,
+                  onLaunchInstalledApp = viewModel::launchInstalledSocialApp,
+                  onTriggerAutofill = viewModel::triggerSocialAutofill,
+                  onOpenAutofillSettings = viewModel::openDeviceAutofillSettings,
+                )
+              }
+
+              // Floating translucent pill to exit Browser Fullscreen
+              if (isBrowserFullscreen && fullscreenCustomView == null && !isInPipMode) {
+                Surface(
+                  shape = RoundedCornerShape(100.dp),
+                  color = Color(0xCC090D14),
+                  border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.55f)),
+                  shadowElevation = 6.dp,
+                  modifier =
+                    Modifier.align(Alignment.TopEnd)
+                      .padding(top = 12.dp, end = 12.dp)
+                      .clip(RoundedCornerShape(100.dp))
+                      .clickable { viewModel.toggleBrowserFullscreen(false) }
+                      .testTag("exit_fullscreen_button"),
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.FullscreenExit,
+                      contentDescription = "Exit fullscreen",
+                      tint = voltColors.cyanAccent,
+                      modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                      text = "Exit Fullscreen",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = Color.White,
+                    )
+                  }
+                }
+              }
             }
 
             // Minimized Persistent Media3 Background Audio/Video Bar
@@ -373,13 +491,14 @@ fun VoltBrowserScreen(
               )
             }
 
-            // Bottom Omnibox Dock on Phones
-            if (!isWideScreen && !isInPipMode) {
+            // Bottom Omnibox Dock on Phones (hidden while browser fullscreen is active)
+            if (!isWideScreen && !isInPipMode && !isBrowserFullscreen) {
               OmniboxDock(
                 tab = activeTab,
                 tabCount = tabs.size,
-                turboShieldEnabled = settings.turboShieldEnabled,
+                adBlockerType = settings.adBlockerType,
                 isVpnActive = vpnState.isAnyProtectionActive,
+                sessionDataUsedBytes = sessionDataUsedBytes,
                 showBottomNavControls = true,
                 onNavigate = viewModel::navigate,
                 onQueryChange = viewModel::onOmniboxQueryChanged,
@@ -393,6 +512,8 @@ fun VoltBrowserScreen(
                 onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
                 onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+                onSwipeLeft = viewModel::switchToNextTab,
+                onSwipeRight = viewModel::switchToPreviousTab,
               )
             }
           }
@@ -483,11 +604,23 @@ fun VoltBrowserScreen(
           onRetryDownload = viewModel::retryDownload,
           onPlayDownload = viewModel::playDownloadedFile,
           onOpenExternalDownload = viewModel::openDownloadInExternalPlayer,
+          onOpenDownload = viewModel::openDownloadedFile,
           onExportDownload = viewModel::exportDownloadToDevice,
           onSaveDownloadAs = viewModel::saveDownloadAsUri,
           onShareDownload = viewModel::shareDownload,
           onDeleteDownload = viewModel::deleteDownload,
           onPlayLocalUri = viewModel::playLocalMediaUri,
+          onLongPressDetectedMedia = { item ->
+            viewModel.showContextMenu(
+              WebContextMenuTarget(
+                pageUrl = item.sourcePageUrl,
+                mediaUrl = item.url,
+                mediaKind = item.kind,
+                mediaTitle = item.title,
+                imageUrl = item.posterUrl,
+              )
+            )
+          },
           onCopyUrlToast = { viewModel.showMessage("Media URL copied") },
           onDismiss = viewModel::closeSheet,
         )
@@ -496,12 +629,11 @@ fun VoltBrowserScreen(
         SecurityTelemetrySheet(
           tab = activeTab,
           settings = settings,
-          onToggleTurboShield = viewModel::toggleTurboShield,
+          sessionDataUsedBytes = sessionDataUsedBytes,
+          onSelectAdBlockerType = viewModel::setAdBlockerType,
           onToggleLiteMode = viewModel::toggleLiteMode,
           onToggleDarkWeb = viewModel::toggleDarkWeb,
-          onToggleDesktopMode = viewModel::toggleDesktopMode,
           onWipeSessionNow = viewModel::wipeSessionCacheAndCookies,
-          onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
           onDismiss = viewModel::closeSheet,
         )
       }
@@ -509,17 +641,20 @@ fun VoltBrowserScreen(
         LibrarySettingsSheet(
           activeTab = activeTab,
           isBookmarked = isBookmarked,
+          isBrowserFullscreen = isBrowserFullscreen,
           settings = settings,
           bookmarks = bookmarks,
           onToggleBookmark = viewModel::toggleBookmark,
           onSharePage = viewModel::shareCurrentPage,
           onOpenFindInPage = { viewModel.toggleFindInPage(true) },
-          onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
+          onToggleDesktopMode = viewModel::toggleDesktopMode,
+          onToggleBrowserFullscreen = { viewModel.toggleBrowserFullscreen() },
+          onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
           onOpenUrl = viewModel::navigate,
           onDeleteBookmark = viewModel::deleteBookmark,
+          onToggleLiteMode = viewModel::toggleLiteMode,
           onSelectSearchEngine = viewModel::setSearchEngine,
-          onWipeSessionNow = viewModel::wipeSessionCacheAndCookies,
-          onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+          onSelectThemeMode = viewModel::setThemeMode,
           onDismiss = viewModel::closeSheet,
         )
       }
@@ -529,10 +664,23 @@ fun VoltBrowserScreen(
           onDismiss = viewModel::closeSheet,
         )
       }
+      BrowserSheet.OMNI_SEARCH -> {
+        OmniSearchDialog(
+          onConfirmMultiQuery = viewModel::openOmniMultiQuery,
+          onDismiss = viewModel::closeSheet,
+        )
+      }
       BrowserSheet.VPN -> {
         FreePublicVpnSheet(
           state = vpnState,
           settings = settings,
+          onConnectWarp = { runWithVpnConsent { viewModel.connectCloudflareWarp() } },
+          onConnectSavedCustomWg = { runWithVpnConsent { viewModel.connectSavedCustomWireGuard() } },
+          onConnectCustomWgConf = { conf, name ->
+            runWithVpnConsent { viewModel.connectCustomWireGuardConf(conf, name) }
+          },
+          onDisconnectWireGuard = { viewModel.disconnectWireGuard() },
+          onToggleAutoWireGuardOnLaunch = viewModel::toggleAutoWireGuardOnLaunch,
           onRefreshRelays = viewModel::refreshPublicRelays,
           onAutoConnectFastestRelay = { viewModel.autoConnectFastestRelay(reloadActiveTab = false) },
           onRotateProxy = { viewModel.rotateToNextProxy(reloadActiveTab = false) },
@@ -540,14 +688,18 @@ fun VoltBrowserScreen(
           onDisconnectRelay = viewModel::disconnectRelay,
           onToggleAutoProxyFailover = viewModel::toggleAutoProxyFailover,
           onToggleAutoProxyOnLaunch = viewModel::toggleAutoProxyOnLaunch,
+          onToggleAutoDnsVpnOnLaunch = { enable ->
+            viewModel.toggleAutoDnsVpnOnLaunch(enable)
+            if (enable && !vpnState.isDnsVpnActive && !vpnState.isWireGuardActive) {
+              runWithVpnConsent { viewModel.startDnsVpnService() }
+            }
+          },
+          onSelectProtocolFilter = viewModel::setProxyProtocolFilter,
+          onSelectCountryFilter = viewModel::setProxyCountryFilter,
+          onConnectCustomProxy = viewModel::connectCustomProxy,
           onToggleDnsVpn = { enable ->
             if (enable) {
-              val consentIntent = viewModel.prepareVpnConsentIntent()
-              if (consentIntent != null) {
-                vpnConsentLauncher.launch(consentIntent)
-              } else {
-                viewModel.startDnsVpnService()
-              }
+              runWithVpnConsent { viewModel.startDnsVpnService() }
             } else {
               viewModel.stopDnsVpn()
             }
@@ -572,6 +724,34 @@ fun VoltBrowserScreen(
         )
       }
       else -> Unit
+    }
+
+    // Long-Press ("Right-Click") Context Menu Sheet for links, images, and media
+    contextMenuTarget?.let { target ->
+      WebContextMenuSheet(
+        target = target,
+        onOpenCurrentTab = viewModel::navigate,
+        onOpenNewTab = { url, incognito ->
+          viewModel.newTab(isIncognito = incognito, initialUrl = url)
+        },
+        onPlayMediaInternal = viewModel::playMediaUrlInternally,
+        onOpenMediaExternal = viewModel::openMediaUrlExternally,
+        onDownloadUrl = { url, title, mime, referer ->
+          viewModel.downloadMedia(
+            url = url,
+            fileName = title,
+            mimeType = mime,
+            referer = referer,
+          )
+        },
+        onShareUrl = viewModel::shareUrl,
+        onDeleteBookmark = { id ->
+          viewModel.deleteBookmark(id)
+          viewModel.showMessage("Removed from Speed Dial")
+        },
+        onCopiedToast = { msg -> viewModel.showMessage(msg) },
+        onDismiss = viewModel::dismissContextMenu,
+      )
     }
   }
 }

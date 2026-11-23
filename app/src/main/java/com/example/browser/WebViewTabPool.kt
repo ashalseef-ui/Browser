@@ -6,19 +6,26 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
+import android.webkit.HttpAuthHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.net.Uri
+import android.view.HapticFeedbackConstants
+import com.example.data.AdBlockerType
 import com.example.data.BrowserSettings
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
+import com.example.data.WebContextMenuTarget
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 interface TabWebCallbacks {
   fun onPageStarted(tabId: String, url: String)
@@ -32,6 +39,7 @@ interface TabWebCallbacks {
   fun onShowFullscreenView(view: View, callback: WebChromeClient.CustomViewCallback)
   fun onHideFullscreenView()
   fun onMainFrameNetworkError(tabId: String, errorCode: Int, description: String)
+  fun onContextMenuRequested(tabId: String, target: WebContextMenuTarget)
 }
 
 class WebViewTabPool(
@@ -39,12 +47,28 @@ class WebViewTabPool(
   private val speedEngine: VoltSpeedEngine,
   private val mainScope: CoroutineScope,
 ) {
+  private data class AppliedWebSettings(
+    val liteModeEnabled: Boolean,
+    val darkWebEnabled: Boolean,
+    val desktopModeEnabled: Boolean,
+  )
+
   private val webViews = LinkedHashMap<String, WebView>(8, 0.75f, true)
+  private val appliedWebSettings = HashMap<String, AppliedWebSettings>()
   private val pageStartTimestamps = HashMap<String, Long>()
   private val currentUrls = HashMap<String, String>()
   private val currentTitles = HashMap<String, String>()
+  private val lastDomTouchTargets = ConcurrentHashMap<String, Pair<Long, WebContextMenuTarget>>()
 
   @Volatile var currentSettings: BrowserSettings = BrowserSettings()
+  var proxyCredentialsProvider: (() -> Pair<String, String>?)? = null
+
+  private fun BrowserSettings.toAppliedWebSettings(): AppliedWebSettings =
+    AppliedWebSettings(
+      liteModeEnabled = liteModeEnabled,
+      darkWebEnabled = darkWebEnabled,
+      desktopModeEnabled = desktopModeEnabled,
+    )
 
   fun getOrCreateWebView(
     tabId: String,
@@ -52,7 +76,11 @@ class WebViewTabPool(
     callbacks: TabWebCallbacks,
   ): WebView {
     webViews[tabId]?.let { existing ->
-      speedEngine.configureWebViewSettings(existing, currentSettings)
+      val target = currentSettings.toAppliedWebSettings()
+      if (appliedWebSettings[tabId] != target) {
+        speedEngine.configureWebViewSettings(existing, currentSettings)
+        appliedWebSettings[tabId] = target
+      }
       return existing
     }
 
@@ -71,11 +99,44 @@ class WebViewTabPool(
     }
 
     speedEngine.configureWebViewSettings(webView, currentSettings)
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+      webView.importantForAutofill =
+        if (isIncognito) View.IMPORTANT_FOR_AUTOFILL_NO
+        else View.IMPORTANT_FOR_AUTOFILL_YES
+    }
 
     val jsBridge =
       VoltMediaJsBridge(
         onDetected = { items -> mainScope.launch(Dispatchers.Main) { callbacks.onMediaDetected(tabId, items) } },
         currentPageUrlProvider = { currentUrls[tabId].orEmpty() },
+        onBlobDownloaded = { dataUrl, suggestedName, mimeType ->
+          mainScope.launch(Dispatchers.Main) {
+            val disposition =
+              when {
+                suggestedName.isBlank() -> ""
+                suggestedName.contains("filename", ignoreCase = true) -> suggestedName
+                else -> "attachment; filename=\"$suggestedName\""
+              }
+            callbacks.onDownloadRequested(
+              url = dataUrl,
+              userAgent = "",
+              contentDisposition = disposition,
+              mimeType = mimeType,
+            )
+          }
+        },
+        onTouchTarget = { linkUrl, linkText, imageUrl, mediaUrl, mediaTitle ->
+          lastDomTouchTargets[tabId] =
+            System.currentTimeMillis() to
+              WebContextMenuTarget(
+                pageUrl = currentUrls[tabId].orEmpty(),
+                linkUrl = linkUrl,
+                linkText = linkText,
+                imageUrl = imageUrl,
+                mediaUrl = mediaUrl,
+                mediaTitle = mediaTitle,
+              )
+        },
       )
     webView.addJavascriptInterface(jsBridge, "VoltMediaBridge")
 
@@ -93,7 +154,20 @@ class WebViewTabPool(
           val uri = request?.url ?: return null
           val isMainFrame = request.isForMainFrame
 
-          if (!isMainFrame && currentSettings.turboShieldEnabled && TurboShield.shouldBlock(uri)) {
+          if (!isMainFrame && currentSettings.liteModeEnabled) {
+            val (shouldBlockData, savedBytes) = VoltDataSaver.shouldBlockForDataSaver(uri)
+            if (shouldBlockData) {
+              mainScope.launch(Dispatchers.Main) {
+                callbacks.onTrackerBlocked(tabId, savedBytes)
+              }
+              return VoltDataSaver.emptySaverResponse()
+            }
+          }
+
+          if (!isMainFrame &&
+            currentSettings.adBlockerType != AdBlockerType.OFF &&
+            TurboShield.shouldBlock(uri, currentSettings.adBlockerType)
+          ) {
             mainScope.launch(Dispatchers.Main) {
               callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
             }
@@ -136,6 +210,9 @@ class WebViewTabPool(
           val startedAt = pageStartTimestamps.remove(tabId) ?: System.currentTimeMillis()
           val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
 
+          TurboShield.cosmeticFilterScript(currentSettings.adBlockerType)?.let { cssScript ->
+            view?.evaluateJavascript(cssScript, null)
+          }
           view?.evaluateJavascript(MediaSniffer.domSnifferScript, null)
 
           callbacks.onPageFinished(
@@ -160,6 +237,20 @@ class WebViewTabPool(
               errorCode = error.errorCode,
               description = error.description?.toString().orEmpty(),
             )
+          }
+        }
+
+        override fun onReceivedHttpAuthRequest(
+          view: WebView?,
+          handler: HttpAuthHandler?,
+          host: String?,
+          realm: String?,
+        ) {
+          val creds = proxyCredentialsProvider?.invoke()
+          if (creds != null && handler != null) {
+            handler.proceed(creds.first, creds.second)
+          } else {
+            super.onReceivedHttpAuthRequest(view, handler, host, realm)
           }
         }
       }
@@ -196,6 +287,14 @@ class WebViewTabPool(
           val hitResult = view?.hitTestResult
           val url = hitResult?.extra
           if (!url.isNullOrBlank() && (url.startsWith("http://") || url.startsWith("https://"))) {
+            if (currentSettings.adBlockerType == AdBlockerType.STRICT &&
+              TurboShield.shouldBlock(Uri.parse(url), AdBlockerType.STRICT)
+            ) {
+              mainScope.launch(Dispatchers.Main) {
+                callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
+              }
+              return false
+            }
             callbacks.onOpenNewTabRequested(url)
             return true
           }
@@ -205,20 +304,80 @@ class WebViewTabPool(
 
     webView.setDownloadListener(
       DownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
-        callbacks.onDownloadRequested(
-          url = url,
-          userAgent = userAgent.orEmpty(),
-          contentDisposition = contentDisposition.orEmpty(),
-          mimeType = mimetype.orEmpty(),
-        )
+        val rawUrl = url.orEmpty()
+        if (rawUrl.startsWith("blob:", ignoreCase = true)) {
+          val js =
+            """
+            (function(bUrl, dispName, mime) {
+              fetch(bUrl).then(function(r) { return r.blob(); }).then(function(blob) {
+                var reader = new FileReader();
+                reader.onloadend = function() {
+                  if (reader.result && window.VoltMediaBridge && window.VoltMediaBridge.onBlobDownloadData) {
+                    window.VoltMediaBridge.onBlobDownloadData(reader.result, dispName, blob.type || mime);
+                  }
+                };
+                reader.readAsDataURL(blob);
+              }).catch(function() {});
+            })(${JSONObject.quote(rawUrl)}, ${JSONObject.quote(contentDisposition.orEmpty())}, ${JSONObject.quote(mimetype.orEmpty())});
+            """.trimIndent()
+          webView.evaluateJavascript(js, null)
+        } else {
+          callbacks.onDownloadRequested(
+            url = rawUrl,
+            userAgent = userAgent.orEmpty(),
+            contentDisposition = contentDisposition.orEmpty(),
+            mimeType = mimetype.orEmpty(),
+          )
+        }
       }
     )
 
+    webView.isLongClickable = true
+    webView.setOnLongClickListener { view ->
+      val hit = (view as? WebView)?.hitTestResult
+      if (hit?.type == WebView.HitTestResult.EDIT_TEXT_TYPE) {
+        return@setOnLongClickListener false
+      }
+      val freshDom =
+        lastDomTouchTargets[tabId]
+          ?.takeIf { System.currentTimeMillis() - it.first <= 2_500L }
+          ?.second
+      val pageUrl = currentUrls[tabId].orEmpty()
+      val target =
+        resolveContextTarget(
+          pageUrl = pageUrl,
+          hitType = hit?.type ?: WebView.HitTestResult.UNKNOWN_TYPE,
+          hitExtra = hit?.extra,
+          domTarget = freshDom,
+        )
+      if (target != null && target.hasAnyTarget) {
+        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        callbacks.onContextMenuRequested(tabId, target)
+        true
+      } else {
+        false
+      }
+    }
+
     webViews[tabId] = webView
+    appliedWebSettings[tabId] = currentSettings.toAppliedWebSettings()
     return webView
   }
 
   fun findWebView(tabId: String): WebView? = webViews[tabId]
+
+  fun requestAutofill(tabId: String): Boolean {
+    val webView = webViews[tabId] ?: return false
+    webView.requestFocus()
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+      val manager = context.getSystemService(android.view.autofill.AutofillManager::class.java)
+      if (manager != null && manager.isEnabled) {
+        manager.requestAutofill(webView)
+        return true
+      }
+    }
+    return false
+  }
 
   fun triggerMediaScan(tabId: String) {
     webViews[tabId]?.evaluateJavascript(MediaSniffer.domSnifferScript, null)
@@ -226,8 +385,12 @@ class WebViewTabPool(
 
   fun refreshSettings(settings: BrowserSettings) {
     currentSettings = settings
-    webViews.values.forEach { wv ->
-      speedEngine.configureWebViewSettings(wv, settings)
+    val target = settings.toAppliedWebSettings()
+    webViews.forEach { (tabId, wv) ->
+      if (appliedWebSettings[tabId] != target) {
+        speedEngine.configureWebViewSettings(wv, settings)
+        appliedWebSettings[tabId] = target
+      }
     }
   }
 
@@ -246,18 +409,22 @@ class WebViewTabPool(
       wv.removeAllViews()
       wv.destroy()
     }
+    appliedWebSettings.remove(tabId)
     pageStartTimestamps.remove(tabId)
     currentUrls.remove(tabId)
     currentTitles.remove(tabId)
+    lastDomTouchTargets.remove(tabId)
   }
 
   fun destroyAllTabs() {
     val ids = webViews.keys.toList()
     ids.forEach { destroyTab(it) }
     wipeAllCacheAndCookies()
+    appliedWebSettings.clear()
     pageStartTimestamps.clear()
     currentUrls.clear()
     currentTitles.clear()
+    lastDomTouchTargets.clear()
   }
 
   private fun classifyExtensionlessVideoRequest(
@@ -289,6 +456,90 @@ class WebViewTabPool(
   }
 
   companion object {
+    fun resolveContextTarget(
+      pageUrl: String,
+      hitType: Int,
+      hitExtra: String?,
+      domTarget: WebContextMenuTarget?,
+    ): WebContextMenuTarget? {
+      if (hitType == WebView.HitTestResult.EDIT_TEXT_TYPE) return null
+
+      var linkUrl = domTarget?.linkUrl?.takeIf { isSupportedContextUrl(it) }
+      val linkText = domTarget?.linkText?.takeIf { it.isNotBlank() }
+      var imageUrl = domTarget?.imageUrl?.takeIf { isSupportedContextUrl(it) }
+      var mediaUrl = domTarget?.mediaUrl?.takeIf { isSupportedContextUrl(it) }
+      var mediaTitle = domTarget?.mediaTitle?.takeIf { it.isNotBlank() }
+
+      val cleanedExtra = hitExtra?.trim()?.takeIf { it.isNotBlank() }
+      when (hitType) {
+        WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
+          if (cleanedExtra != null && isSupportedContextUrl(cleanedExtra)) {
+            linkUrl = cleanedExtra
+          }
+        }
+        WebView.HitTestResult.IMAGE_TYPE -> {
+          if (cleanedExtra != null && isSupportedContextUrl(cleanedExtra)) {
+            imageUrl = cleanedExtra
+          }
+        }
+        WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+          if (cleanedExtra != null && isSupportedContextUrl(cleanedExtra)) {
+            imageUrl = cleanedExtra
+          }
+        }
+        WebView.HitTestResult.EMAIL_TYPE -> {
+          if (cleanedExtra != null) {
+            linkUrl = if (cleanedExtra.startsWith("mailto:", true)) cleanedExtra else "mailto:$cleanedExtra"
+          }
+        }
+        WebView.HitTestResult.PHONE_TYPE -> {
+          if (cleanedExtra != null) {
+            linkUrl = if (cleanedExtra.startsWith("tel:", true)) cleanedExtra else "tel:$cleanedExtra"
+          }
+        }
+        WebView.HitTestResult.GEO_TYPE -> {
+          if (cleanedExtra != null) {
+            linkUrl = if (cleanedExtra.startsWith("geo:", true)) cleanedExtra else "geo:0,0?q=$cleanedExtra"
+          }
+        }
+      }
+
+      var mediaKind: MediaKind? = null
+      if (mediaUrl != null) {
+        mediaKind = MediaSniffer.classifyUrl(mediaUrl, pageUrl, mediaTitle.orEmpty())?.kind ?: MediaKind.VIDEO
+      } else if (linkUrl != null) {
+        val classifiedLink = MediaSniffer.classifyUrl(linkUrl, pageUrl, linkText.orEmpty())
+        if (classifiedLink != null) {
+          mediaUrl = linkUrl
+          mediaKind = classifiedLink.kind
+          if (mediaTitle.isNullOrBlank()) {
+            mediaTitle = classifiedLink.title
+          }
+        }
+      }
+
+      val resolved =
+        WebContextMenuTarget(
+          pageUrl = pageUrl,
+          linkUrl = linkUrl,
+          linkText = linkText,
+          imageUrl = imageUrl,
+          mediaUrl = mediaUrl,
+          mediaKind = mediaKind,
+          mediaTitle = mediaTitle,
+        )
+      return resolved.takeIf { it.hasAnyTarget }
+    }
+
+    private fun isSupportedContextUrl(url: String): Boolean {
+      val low = url.trim().lowercase(Locale.US)
+      return low.startsWith("http://") ||
+        low.startsWith("https://") ||
+        low.startsWith("mailto:") ||
+        low.startsWith("tel:") ||
+        low.startsWith("geo:")
+    }
+
     private val NON_VIDEO_EXTENSIONS =
       setOf(
         "ts", "m4s", "mp3", "aac", "m4a", "ogg", "opus", "flac", "wav",

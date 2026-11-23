@@ -13,6 +13,18 @@ fun formatBytes(bytes: Long): String {
   return String.format(Locale.US, "%.2f GB", gb)
 }
 
+fun formatCompactDataCounter(bytes: Long): String {
+  val safe = bytes.coerceAtLeast(0L)
+  if (safe < 1024L) return "${safe}B"
+  val kb = safe / 1024.0
+  if (kb < 1024.0) return String.format(Locale.US, "%.0fK", kb)
+  val mb = kb / 1024.0
+  if (mb < 100.0) return String.format(Locale.US, "%.1fM", mb)
+  if (mb < 1024.0) return String.format(Locale.US, "%.0fM", mb)
+  val gb = mb / 1024.0
+  return String.format(Locale.US, "%.1fG", gb)
+}
+
 fun formatDurationMs(ms: Long): String {
   val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
   val hours = totalSeconds / 3600L

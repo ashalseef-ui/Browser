@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import okhttp3.ConnectionPool
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -40,6 +41,7 @@ class VoltSpeedEngine(private val context: Context) {
   private val prewarmedHosts = ConcurrentHashMap.newKeySet<String>()
 
   private val activeProxyRef = AtomicReference<Proxy?>(null)
+  private val activeProxyAuthRef = AtomicReference<Pair<String, String>?>(null)
 
   @Volatile var isWebViewWarmedUp: Boolean = false
     private set
@@ -60,6 +62,14 @@ class VoltSpeedEngine(private val context: Context) {
   val okHttpClient: OkHttpClient =
     OkHttpClient.Builder()
       .proxySelector(dynamicProxySelector)
+      .proxyAuthenticator { _, response ->
+        val creds = activeProxyAuthRef.get() ?: return@proxyAuthenticator null
+        if (response.request.header("Proxy-Authorization") != null) return@proxyAuthenticator null
+        response.request
+          .newBuilder()
+          .header("Proxy-Authorization", Credentials.basic(creds.first, creds.second))
+          .build()
+      }
       .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
       .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
       .connectTimeout(8, TimeUnit.SECONDS)
@@ -67,10 +77,15 @@ class VoltSpeedEngine(private val context: Context) {
       .followRedirects(true)
       .build()
 
-  fun setActiveProxy(proxy: Proxy?) {
+  fun setActiveProxy(proxy: Proxy?, username: String? = null, password: String? = null) {
     activeProxyRef.set(proxy)
+    activeProxyAuthRef.set(
+      if (proxy != null && !username.isNullOrBlank()) username to password.orEmpty() else null
+    )
     prewarmedHosts.clear()
   }
+
+  fun getActiveProxyCredentials(): Pair<String, String>? = activeProxyAuthRef.get()
 
   @Suppress("OPT_IN_USAGE")
   fun warmUpChromiumAsync() {
@@ -87,9 +102,11 @@ class VoltSpeedEngine(private val context: Context) {
   }
 
   /**
-   * Resolves DNS and warms up TLS/HTTP2 socket connection in OkHttp pool ahead of WebView navigation.
+   * Resolves DNS and warms up TLS/HTTP2 socket connection in OkHttp pool ahead of direct navigation.
+   * Skipped when routing via a public proxy to avoid saturating limited proxy connections.
    */
   fun prewarmOrigin(rawUrl: String) {
+    if (activeProxyRef.get() != null) return
     val normalized = normalizeInputToUrl(rawUrl, SearchEngine.DUCKDUCKGO, forceUrlOnly = true) ?: return
     val host = runCatching { java.net.URI(normalized).host }.getOrNull() ?: return
     if (!prewarmedHosts.add(host)) return
@@ -102,6 +119,8 @@ class VoltSpeedEngine(private val context: Context) {
       }
     }
   }
+
+  private val defaultUserAgent: String by lazy { WebSettings.getDefaultUserAgent(context) }
 
   @SuppressLint("SetJavaScriptEnabled")
   fun configureWebViewSettings(webView: WebView, settings: BrowserSettings) {
@@ -129,12 +148,11 @@ class VoltSpeedEngine(private val context: Context) {
     ws.loadsImagesAutomatically = !settings.liteModeEnabled
     ws.blockNetworkImage = settings.liteModeEnabled
 
-    val defaultUa = WebSettings.getDefaultUserAgent(context)
     ws.userAgentString =
       if (settings.desktopModeEnabled) {
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
       } else {
-        defaultUa
+        defaultUserAgent
       }
 
     if (WebViewFeature.isFeatureSupported(WebViewFeature.OFF_SCREEN_PRERASTER)) {

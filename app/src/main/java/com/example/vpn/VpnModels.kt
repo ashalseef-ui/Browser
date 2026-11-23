@@ -7,24 +7,61 @@ enum class DohProvider(
 ) {
   CLOUDFLARE(
     displayName = "Cloudflare 1.1.1.1",
-    subtitle = "Ultra-fast private DNS",
+    subtitle = "Ultra-fast global private DNS",
     endpointUrl = "https://cloudflare-dns.com/dns-query",
   ),
   CLOUDFLARE_SECURITY(
-    displayName = "Cloudflare Malware Block",
+    displayName = "Cloudflare Malware Shield",
     subtitle = "Blocks phishing & malware domains",
     endpointUrl = "https://security.cloudflare-dns.com/dns-query",
   ),
+  MULLVAD_ADBLOCK(
+    displayName = "Mullvad AdBlock DNS",
+    subtitle = "No-logs DNS blocking ads & trackers",
+    endpointUrl = "https://adblock.dns.mullvad.net/dns-query",
+  ),
+  MULLVAD(
+    displayName = "Mullvad Unfiltered",
+    subtitle = "No-logs uncensored privacy DNS",
+    endpointUrl = "https://dns.mullvad.net/dns-query",
+  ),
   ADGUARD(
     displayName = "AdGuard Public DNS",
-    subtitle = "Blocks ads & trackers at DNS level",
+    subtitle = "Blocks ads & tracking at DNS level",
     endpointUrl = "https://dns.adguard-dns.com/dns-query",
+  ),
+  CONTROLD_ADBLOCK(
+    displayName = "Control D Anti-Tracker",
+    subtitle = "Blocks ads, trackers & malware",
+    endpointUrl = "https://freedns.controld.com/p2",
+  ),
+  CONTROLD_UNFILTERED(
+    displayName = "Control D Unfiltered",
+    subtitle = "Fast uncensored anycast DNS",
+    endpointUrl = "https://freedns.controld.com/p0",
   ),
   QUAD9(
     displayName = "Quad9 Security",
     subtitle = "Threat intelligence DNS shield",
     endpointUrl = "https://dns.quad9.net/dns-query",
   ),
+  DNS_SB(
+    displayName = "DNS.SB Privacy",
+    subtitle = "No-logs uncensored European DNS",
+    endpointUrl = "https://doh.dns.sb/dns-query",
+  ),
+}
+
+enum class ProxyProtocolFilter(val label: String) {
+  ALL("All"),
+  HTTP("HTTP/S"),
+  SOCKS5("SOCKS5"),
+}
+
+enum class WireGuardMode {
+  NONE,
+  WARP_FREE,
+  CUSTOM_CONF,
 }
 
 data class PublicRelayNode(
@@ -37,11 +74,29 @@ data class PublicRelayNode(
   val source: String = "Public",
   val latencyMs: Long? = null,
   val isReachable: Boolean? = null,
+  val resolvedExitIp: String? = null,
+  val username: String? = null,
+  val password: String? = null,
 ) {
   val id: String get() = "$ip:$port"
+
+  val hasAuthentication: Boolean
+    get() = !username.isNullOrBlank()
+
+  val isPreferredRegion: Boolean
+    get() = countryCode.equals("DE", ignoreCase = true) || countryCode.equals("IN", ignoreCase = true)
 }
 
 data class VpnTunnelState(
+  val isWireGuardActive: Boolean = false,
+  val isWireGuardConnecting: Boolean = false,
+  val wireGuardMode: WireGuardMode = WireGuardMode.NONE,
+  val wireGuardProfileName: String = "",
+  val wireGuardEndpoint: String = "",
+  val wireGuardRxBytes: Long = 0L,
+  val wireGuardTxBytes: Long = 0L,
+  val hasSavedWarpConfig: Boolean = false,
+  val hasSavedCustomWgConf: Boolean = false,
   val isDnsVpnActive: Boolean = false,
   val isDnsVpnConnecting: Boolean = false,
   val activeDohProvider: DohProvider = DohProvider.CLOUDFLARE,
@@ -50,8 +105,11 @@ data class VpnTunnelState(
   val activeRelay: PublicRelayNode? = null,
   val isConnectingRelay: Boolean = false,
   val availableRelays: List<PublicRelayNode> = emptyList(),
+  val totalCandidatesScanned: Int = 0,
   val isFetchingRelays: Boolean = false,
   val autoFailoversCount: Int = 0,
+  val selectedProtocolFilter: ProxyProtocolFilter = ProxyProtocolFilter.ALL,
+  val selectedCountryFilter: String = "ALL",
   val currentExitIp: String = "Checking...",
   val currentExitCountry: String = "",
   val statusMessage: String? = null,
@@ -60,7 +118,7 @@ data class VpnTunnelState(
     get() = activeRelay != null
 
   val isAnyProtectionActive: Boolean
-    get() = isAutoProxyActive || isDnsVpnActive
+    get() = isWireGuardActive || isAutoProxyActive || isDnsVpnActive
 }
 
 data class ParsedDnsPacket(
@@ -174,7 +232,6 @@ object DnsPacketCodec {
     udpLen: Int,
   ): Int {
     var sum = 0L
-    // Pseudo-header: srcIp + dstIp + 0x0011 + udpLen
     for (i in 0 until 4 step 2) {
       sum += ((srcIp[i].toInt() and 0xFF) shl 8) or (srcIp[i + 1].toInt() and 0xFF)
       sum += ((dstIp[i].toInt() and 0xFF) shl 8) or (dstIp[i + 1].toInt() and 0xFF)
@@ -182,7 +239,6 @@ object DnsPacketCodec {
     sum += 17L // UDP protocol
     sum += udpLen.toLong()
 
-    // UDP header + payload (skip checksum bytes 26..27)
     var i = 20
     val end = 20 + udpLen
     while (i + 1 < end) {

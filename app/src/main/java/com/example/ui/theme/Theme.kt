@@ -1,18 +1,17 @@
 package com.example.ui.theme
 
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.example.data.AppThemeMode
 
-private val VoltDarkColorScheme =
+private val CyberObsidianColorScheme =
   darkColorScheme(
     primary = VoltCyan,
     onPrimary = Color(0xFF002026),
@@ -39,55 +38,54 @@ private val VoltDarkColorScheme =
     error = VoltCrimson,
   )
 
-private val VoltLightColorScheme =
+private val ZenLightColorScheme =
   lightColorScheme(
-    primary = DaylightCyan,
+    primary = Color(0xFF0284C7),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFD0F4FA),
-    onPrimaryContainer = Color(0xFF003640),
-    secondary = DaylightAmber,
+    primaryContainer = Color(0xFFE0F2FE),
+    onPrimaryContainer = Color(0xFF0369A1),
+    secondary = Color(0xFFD97706),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFEF3C7),
-    onSecondaryContainer = Color(0xFF78350F),
-    tertiary = DaylightEmerald,
+    tertiary = Color(0xFF059669),
     onTertiary = Color.White,
-    background = DaylightBg,
-    onBackground = DaylightTextPrimary,
-    surface = DaylightSurface,
-    onSurface = DaylightTextPrimary,
-    surfaceVariant = DaylightSurfaceHigh,
-    onSurfaceVariant = DaylightTextSecondary,
-    surfaceContainerLowest = DaylightSurface,
-    surfaceContainerLow = DaylightBg,
-    surfaceContainer = DaylightSurfaceHigh,
-    surfaceContainerHigh = DaylightSurfaceHighest,
-    outline = DaylightBorder,
+    background = ZenPaperBg,
+    onBackground = ZenPrimary,
+    surface = ZenPaperSurface,
+    onSurface = ZenPrimary,
+    surfaceVariant = ZenPaperSurfaceHigh,
+    onSurfaceVariant = ZenSecondary,
+    surfaceContainerLowest = ZenPaperSurface,
+    surfaceContainerLow = ZenPaperBg,
+    surfaceContainer = ZenPaperSurfaceHigh,
+    surfaceContainerHigh = ZenPaperSurfaceHighest,
+    outline = ZenBorder,
     outlineVariant = Color(0xFFE2E8F0),
     error = Color(0xFFDC2626),
   )
 
+private val RoundedVoltShapes =
+  Shapes(
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+  )
+
 @Composable
 fun VoltBrowserTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
-  dynamicColor: Boolean = false,
+  themeMode: AppThemeMode = AppThemeMode.CYBER_OBSIDIAN,
   content: @Composable () -> Unit,
 ) {
-  val colorScheme =
-    when {
-      dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        val context = LocalContext.current
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-      }
-      darkTheme -> VoltDarkColorScheme
-      else -> VoltLightColorScheme
+  val (colorScheme, extendedColors) =
+    when (themeMode) {
+      AppThemeMode.CYBER_OBSIDIAN -> CyberObsidianColorScheme to DarkVoltExtendedColors
+      AppThemeMode.ZEN_LIGHT -> ZenLightColorScheme to ZenLightExtendedColors
     }
-
-  val extendedColors = if (darkTheme) DarkVoltExtendedColors else LightVoltExtendedColors
 
   CompositionLocalProvider(LocalVoltColors provides extendedColors) {
     MaterialTheme(
       colorScheme = colorScheme,
       typography = VoltTypography,
+      shapes = RoundedVoltShapes,
       content = content,
     )
   }

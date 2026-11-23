@@ -3,8 +3,9 @@ package com.example.ui.theme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.example.data.AppThemeMode
 
-// Cyber-Obsidian Dark Palette
+// Cyber Obsidian Dark Palette
 val VoltCyan = Color(0xFF00E5FF)
 val VoltCyanDim = Color(0xFF00B8D4)
 val VoltAmber = Color(0xFFFFB300)
@@ -20,20 +21,19 @@ val ObsidianBorder = Color(0xFF2B3952)
 val ObsidianTextPrimary = Color(0xFFF1F5F9)
 val ObsidianTextSecondary = Color(0xFF94A3B8)
 
-// Daylight Ice Light Palette
-val DaylightBg = Color(0xFFF3F6FA)
-val DaylightSurface = Color(0xFFFFFFFF)
-val DaylightSurfaceHigh = Color(0xFFE9EFF6)
-val DaylightSurfaceHighest = Color(0xFFDCE5F0)
-val DaylightBorder = Color(0xFFCBD5E1)
-val DaylightCyan = Color(0xFF007C91)
-val DaylightAmber = Color(0xFFD97706)
-val DaylightEmerald = Color(0xFF059669)
-val DaylightTextPrimary = Color(0xFF0F172A)
-val DaylightTextSecondary = Color(0xFF475569)
+// Zen Light Paper Palette
+val ZenPaperBg = Color(0xFFF6F8FB)
+val ZenPaperSurface = Color(0xFFFFFFFF)
+val ZenPaperSurfaceHigh = Color(0xFFEFF3F8)
+val ZenPaperSurfaceHighest = Color(0xFFE2E8F0)
+val ZenBorder = Color(0xFFD5DEE8)
+val ZenPrimary = Color(0xFF0F172A)
+val ZenSecondary = Color(0xFF475569)
 
 @Immutable
 data class VoltExtendedColors(
+  val themeMode: AppThemeMode,
+  val isLightTheme: Boolean,
   val cyanAccent: Color,
   val amberAccent: Color,
   val emeraldShield: Color,
@@ -41,10 +41,14 @@ data class VoltExtendedColors(
   val cardSurface: Color,
   val cardBorder: Color,
   val omniboxSurface: Color,
+  val pillSurface: Color,
+  val pillBorder: Color,
 )
 
 val DarkVoltExtendedColors =
   VoltExtendedColors(
+    themeMode = AppThemeMode.CYBER_OBSIDIAN,
+    isLightTheme = false,
     cyanAccent = VoltCyan,
     amberAccent = VoltAmber,
     emeraldShield = VoltEmerald,
@@ -52,17 +56,23 @@ val DarkVoltExtendedColors =
     cardSurface = ObsidianSurfaceHigh,
     cardBorder = ObsidianBorder,
     omniboxSurface = ObsidianSurfaceHighest,
+    pillSurface = Color(0xAA111824),
+    pillBorder = Color(0x22FFFFFF),
   )
 
-val LightVoltExtendedColors =
+val ZenLightExtendedColors =
   VoltExtendedColors(
-    cyanAccent = DaylightCyan,
-    amberAccent = DaylightAmber,
-    emeraldShield = DaylightEmerald,
-    incognitoAccent = Color(0xFF6D28D9),
-    cardSurface = DaylightSurface,
-    cardBorder = DaylightBorder,
-    omniboxSurface = DaylightSurfaceHigh,
+    themeMode = AppThemeMode.ZEN_LIGHT,
+    isLightTheme = true,
+    cyanAccent = Color(0xFF0284C7),
+    amberAccent = Color(0xFFD97706),
+    emeraldShield = Color(0xFF059669),
+    incognitoAccent = Color(0xFF7C3AED),
+    cardSurface = ZenPaperSurface,
+    cardBorder = ZenBorder,
+    omniboxSurface = ZenPaperSurfaceHigh,
+    pillSurface = Color(0xFFF1F5F9),
+    pillBorder = ZenBorder,
   )
 
 val LocalVoltColors = staticCompositionLocalOf { DarkVoltExtendedColors }

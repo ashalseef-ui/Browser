@@ -109,15 +109,16 @@ fun TabSwitcherOverlay(
               else -> voltColors.cardBorder
             }
 
+          val cardShape = RoundedCornerShape(18.dp)
           Surface(
             modifier =
               Modifier.fillMaxWidth()
                 .height(148.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .border(if (isActive) 2.dp else 1.dp, borderColor, RoundedCornerShape(18.dp))
+                .clip(cardShape)
+                .border(if (isActive) 2.dp else 1.dp, borderColor, cardShape)
                 .clickable { onSelectTab(tab.id) }
                 .testTag("tab_card_${tab.id}"),
-            shape = RoundedCornerShape(18.dp),
+            shape = cardShape,
             color = voltColors.cardSurface,
           ) {
             Column(
@@ -249,8 +250,8 @@ fun TabSwitcherOverlay(
           modifier = Modifier.weight(1f).height(50.dp).testTag("new_tab_button"),
           colors =
             ButtonDefaults.buttonColors(
-              containerColor = voltColors.cyanAccent,
-              contentColor = Color(0xFF002026),
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary,
             ),
         ) {
           Icon(imageVector = Icons.Default.Add, contentDescription = null)

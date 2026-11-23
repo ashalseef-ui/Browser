@@ -17,6 +17,7 @@ import java.io.FileOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.net.SocketFactory
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -45,10 +49,19 @@ data class VpnServiceRuntimeStats(
 
 class VoltVpnService : VpnService() {
 
+  private data class CachedDnsEntry(
+    val responseBytes: ByteArray,
+    val expiresAtMs: Long,
+  )
+
   private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private var tunInterface: ParcelFileDescriptor? = null
   private var tunnelJob: Job? = null
   private var currentProvider: DohProvider = DohProvider.CLOUDFLARE
+
+  // Strictly ephemeral in-memory DNS cache (wiped on disconnect/destroy, never written to disk)
+  private val dnsCache = ConcurrentHashMap<String, CachedDnsEntry>()
+  private val dnsConcurrencyLimiter = Semaphore(32)
 
   private val protectedSocketFactory =
     object : SocketFactory() {
@@ -57,7 +70,7 @@ class VoltVpnService : VpnService() {
       override fun createSocket(host: String, port: Int): Socket =
         Socket().also {
           protect(it)
-          it.connect(InetSocketAddress(host, port), 8_000)
+          it.connect(InetSocketAddress(host, port), 6_000)
         }
 
       override fun createSocket(
@@ -69,13 +82,13 @@ class VoltVpnService : VpnService() {
         Socket().also {
           protect(it)
           it.bind(InetSocketAddress(localHost, localPort))
-          it.connect(InetSocketAddress(host, port), 8_000)
+          it.connect(InetSocketAddress(host, port), 6_000)
         }
 
       override fun createSocket(host: InetAddress, port: Int): Socket =
         Socket().also {
           protect(it)
-          it.connect(InetSocketAddress(host, port), 8_000)
+          it.connect(InetSocketAddress(host, port), 6_000)
         }
 
       override fun createSocket(
@@ -87,15 +100,16 @@ class VoltVpnService : VpnService() {
         Socket().also {
           protect(it)
           it.bind(InetSocketAddress(localAddress, localPort))
-          it.connect(InetSocketAddress(address, port), 8_000)
+          it.connect(InetSocketAddress(address, port), 6_000)
         }
     }
 
   private val dohClient: OkHttpClient by lazy {
     OkHttpClient.Builder()
       .socketFactory(protectedSocketFactory)
-      .connectTimeout(6, TimeUnit.SECONDS)
-      .readTimeout(6, TimeUnit.SECONDS)
+      .connectionPool(ConnectionPool(8, 2, TimeUnit.MINUTES))
+      .connectTimeout(4, TimeUnit.SECONDS)
+      .readTimeout(4, TimeUnit.SECONDS)
       .build()
   }
 
@@ -110,6 +124,7 @@ class VoltVpnService : VpnService() {
     currentProvider =
       DohProvider.entries.firstOrNull { it.name == providerName } ?: DohProvider.CLOUDFLARE
 
+    dnsCache.clear()
     startForegroundNotification()
     startTunnel()
     return START_STICKY
@@ -206,22 +221,24 @@ class VoltVpnService : VpnService() {
 
           val parsed = DnsPacketCodec.parseIpv4UdpDnsQuery(packetBuffer, readBytes) ?: continue
           launch {
-            val started = System.currentTimeMillis()
-            val responseBytes = forwardDnsOverHttps(parsed.dnsPayload)
-            if (responseBytes != null) {
-              val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(1L)
-              val ipPacket = DnsPacketCodec.buildIpv4UdpDnsResponse(parsed, responseBytes)
-              synchronized(writeLock) {
-                runCatching {
-                  output.write(ipPacket)
-                  output.flush()
+            dnsConcurrencyLimiter.withPermit {
+              val started = System.currentTimeMillis()
+              val responseBytes = resolveDnsWithCacheAndFailover(parsed.dnsPayload)
+              if (responseBytes != null) {
+                val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                val ipPacket = DnsPacketCodec.buildIpv4UdpDnsResponse(parsed, responseBytes)
+                synchronized(writeLock) {
+                  runCatching {
+                    output.write(ipPacket)
+                    output.flush()
+                  }
                 }
-              }
-              _runtimeStats.update { stats ->
-                stats.copy(
-                  queriesEncrypted = stats.queriesEncrypted + 1,
-                  lastLatencyMs = elapsed,
-                )
+                _runtimeStats.update { stats ->
+                  stats.copy(
+                    queriesEncrypted = stats.queriesEncrypted + 1,
+                    lastLatencyMs = elapsed,
+                  )
+                }
               }
             }
           }
@@ -229,11 +246,52 @@ class VoltVpnService : VpnService() {
       }
   }
 
-  private fun forwardDnsOverHttps(dnsQuery: ByteArray): ByteArray? {
+  private fun resolveDnsWithCacheAndFailover(dnsQuery: ByteArray): ByteArray? {
+    val cacheKey = extractCacheKey(dnsQuery)
+    val now = System.currentTimeMillis()
+    if (cacheKey != null) {
+      val cached = dnsCache[cacheKey]
+      if (cached != null && now < cached.expiresAtMs && cached.responseBytes.size >= 2 && dnsQuery.size >= 2) {
+        val cloned = cached.responseBytes.copyOf()
+        // Stamp incoming 16-bit DNS transaction ID onto cached response
+        cloned[0] = dnsQuery[0]
+        cloned[1] = dnsQuery[1]
+        return cloned
+      } else if (cached != null && now >= cached.expiresAtMs) {
+        dnsCache.remove(cacheKey)
+      }
+    }
+
+    val primaryResponse = forwardDnsOverHttps(currentProvider.endpointUrl, dnsQuery)
+    val resolved =
+      if (primaryResponse != null) {
+        primaryResponse
+      } else {
+        val fallbackProvider =
+          if (currentProvider == DohProvider.CLOUDFLARE) DohProvider.QUAD9 else DohProvider.CLOUDFLARE
+        forwardDnsOverHttps(fallbackProvider.endpointUrl, dnsQuery)
+      }
+
+    if (resolved != null && cacheKey != null) {
+      if (dnsCache.size > 256) {
+        dnsCache.clear()
+      }
+      dnsCache[cacheKey] = CachedDnsEntry(resolved.copyOf(), now + 45_000L)
+    }
+    return resolved
+  }
+
+  private fun extractCacheKey(dnsQuery: ByteArray): String? {
+    // DNS header is 12 bytes; skip txId (0..1) and flags/counts (2..11), hash question section
+    if (dnsQuery.size <= 12) return null
+    return dnsQuery.copyOfRange(12, dnsQuery.size).contentHashCode().toString()
+  }
+
+  private fun forwardDnsOverHttps(endpointUrl: String, dnsQuery: ByteArray): ByteArray? {
     val mediaType = "application/dns-message".toMediaType()
     val request =
       Request.Builder()
-        .url(currentProvider.endpointUrl)
+        .url(endpointUrl)
         .header("Accept", "application/dns-message")
         .post(dnsQuery.toRequestBody(mediaType))
         .build()
@@ -248,6 +306,7 @@ class VoltVpnService : VpnService() {
   private fun stopTunnel() {
     tunnelJob?.cancel()
     tunnelJob = null
+    dnsCache.clear()
     runCatching { tunInterface?.close() }
     tunInterface = null
     _runtimeStats.update { it.copy(isRunning = false) }

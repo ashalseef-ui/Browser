@@ -1,7 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,7 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
@@ -24,7 +30,8 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.FindInPage
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Share
@@ -62,8 +69,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.AdBlockerType
+import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserSettings
 import com.example.data.BrowserTabState
@@ -71,28 +81,33 @@ import com.example.data.SearchEngine
 import com.example.ui.components.extractHost
 import com.example.ui.components.formatBytes
 import com.example.ui.theme.LocalVoltColors
+import com.example.ui.theme.VoltCyan
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SecurityTelemetrySheet(
   tab: BrowserTabState,
   settings: BrowserSettings,
-  onToggleTurboShield: (Boolean) -> Unit,
+  sessionDataUsedBytes: Long = 0L,
+  onSelectAdBlockerType: (AdBlockerType) -> Unit,
   onToggleLiteMode: (Boolean) -> Unit,
   onToggleDarkWeb: (Boolean) -> Unit,
-  onToggleDesktopMode: (Boolean) -> Unit,
   onWipeSessionNow: () -> Unit,
-  onRequestExit: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   val voltColors = LocalVoltColors.current
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
+    sheetState = sheetState,
     containerColor = MaterialTheme.colorScheme.surface,
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+      modifier =
+        Modifier.fillMaxWidth()
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 20.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Row(
@@ -112,7 +127,7 @@ fun SecurityTelemetrySheet(
           Text(
             text =
               when {
-                tab.isSpeedDial -> "Zero-Trace Engine Ready"
+                tab.isSpeedDial -> "Zero-Trace Shield Ready"
                 tab.isSecure -> "Encrypted HTTPS Connection"
                 else -> "Unencrypted HTTP Connection"
               },
@@ -122,17 +137,18 @@ fun SecurityTelemetrySheet(
           Text(
             text =
               if (tab.isSpeedDial) "No history • No disk cache"
-              else "${extractHost(tab.url)} • No history/cache",
+              else "${extractHost(tab.url)} • Ephemeral session",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
       }
 
+      // Live Page Telemetry Strip
       Surface(
         shape = RoundedCornerShape(16.dp),
         color = voltColors.cardSurface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, voltColors.cardBorder),
+        border = BorderStroke(1.dp, voltColors.cardBorder),
       ) {
         Row(
           modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -140,42 +156,141 @@ fun SecurityTelemetrySheet(
         ) {
           Column {
             Text(
-              text = "TRACKERS BLOCKED",
+              text = "BLOCKED",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-              text = "${tab.trackersBlockedOnPage} on page",
+              text = "${tab.trackersBlockedOnPage}",
               style = MaterialTheme.typography.titleMedium,
               color = voltColors.emeraldShield,
             )
           }
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+              text = "DATA USED",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+              text = formatBytes(sessionDataUsedBytes),
+              style = MaterialTheme.typography.titleMedium,
+              color = voltColors.cyanAccent,
+            )
+          }
           Column(horizontalAlignment = Alignment.End) {
             Text(
-              text = "PAGE LOAD TIME",
+              text = "LOAD TIME",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
               text = tab.lastLoadTimeMs?.let { "${it} ms" } ?: "—",
               style = MaterialTheme.typography.titleMedium,
-              color = voltColors.cyanAccent,
+              color = voltColors.amberAccent,
             )
           }
         }
       }
 
-      SettingToggleRow(
-        icon = Icons.Default.Shield,
-        title = "Turbo Shield",
-        subtitle = "Block ad networks, tracking pixels & heavy scripts",
-        checked = settings.turboShieldEnabled,
-        onCheckedChange = onToggleTurboShield,
-      )
+      // AdGuard & Blocker Type Selector Card
+      Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = voltColors.cardSurface,
+        border = BorderStroke(1.dp, voltColors.emeraldShield.copy(alpha = 0.42f)),
+        modifier = Modifier.fillMaxWidth().testTag("ad_blocker_type_card"),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(14.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.Shield,
+              contentDescription = null,
+              tint = voltColors.emeraldShield,
+              modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "AdGuard & Blocker Engine",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text = settings.adBlockerType.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            AdBlockerType.entries.forEach { blocker ->
+              val selected = settings.adBlockerType == blocker
+              val accent =
+                when (blocker) {
+                  AdBlockerType.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+                  AdBlockerType.STANDARD -> voltColors.emeraldShield
+                  AdBlockerType.ADGUARD -> voltColors.emeraldShield
+                  AdBlockerType.STRICT -> voltColors.cyanAccent
+                }
+              val shortLabel =
+                when (blocker) {
+                  AdBlockerType.OFF -> "Off"
+                  AdBlockerType.STANDARD -> "Standard"
+                  AdBlockerType.ADGUARD -> "AdGuard"
+                  AdBlockerType.STRICT -> "Strict"
+                }
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                color =
+                  if (selected) accent.copy(alpha = 0.18f)
+                  else MaterialTheme.colorScheme.surfaceContainerHigh,
+                border =
+                  BorderStroke(
+                    width = if (selected) 1.5.dp else 1.dp,
+                    color = if (selected) accent else MaterialTheme.colorScheme.outlineVariant,
+                  ),
+                modifier =
+                  Modifier.weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onSelectAdBlockerType(blocker) }
+                    .testTag("blocker_type_${blocker.name.lowercase()}"),
+              ) {
+                Column(
+                  modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                  Text(
+                    text = shortLabel,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = if (selected) accent else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                  )
+                  Text(
+                    text = blocker.badgeLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+
       SettingToggleRow(
         icon = Icons.Default.Speed,
         title = "Lite Text-First Boost",
-        subtitle = "Skip remote images for ultra-fast mobile loading",
+        subtitle = "Skip remote images & fonts for ultra-fast mobile loading",
         checked = settings.liteModeEnabled,
         onCheckedChange = onToggleLiteMode,
       )
@@ -185,13 +300,6 @@ fun SecurityTelemetrySheet(
         subtitle = "Apply algorithmic dark theme to web pages",
         checked = settings.darkWebEnabled,
         onCheckedChange = onToggleDarkWeb,
-      )
-      SettingToggleRow(
-        icon = Icons.Default.DesktopWindows,
-        title = "Desktop Site Mode",
-        subtitle = "Request desktop layout & reload page",
-        checked = settings.desktopModeEnabled,
-        onCheckedChange = onToggleDesktopMode,
       )
 
       OutlinedButton(
@@ -206,20 +314,6 @@ fun SecurityTelemetrySheet(
         Text("Wipe Active Session Cookies & Cache")
       }
 
-      Button(
-        onClick = onRequestExit,
-        colors =
-          ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-          ),
-        modifier = Modifier.fillMaxWidth().testTag("security_exit_erase_button"),
-      ) {
-        Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("Exit & Erase All Data")
-      }
-
       Spacer(modifier = Modifier.height(12.dp))
     }
   }
@@ -230,17 +324,20 @@ fun SecurityTelemetrySheet(
 fun LibrarySettingsSheet(
   activeTab: BrowserTabState,
   isBookmarked: Boolean,
+  isBrowserFullscreen: Boolean,
   settings: BrowserSettings,
   bookmarks: List<BookmarkEntity>,
   onToggleBookmark: () -> Unit,
   onSharePage: () -> Unit,
   onOpenFindInPage: () -> Unit,
-  onOpenMediaHub: () -> Unit,
+  onToggleDesktopMode: (Boolean) -> Unit,
+  onToggleBrowserFullscreen: () -> Unit,
+  onOpenSecuritySheet: () -> Unit,
   onOpenUrl: (String) -> Unit,
   onDeleteBookmark: (Long) -> Unit,
+  onToggleLiteMode: (Boolean) -> Unit,
   onSelectSearchEngine: (SearchEngine) -> Unit,
-  onWipeSessionNow: () -> Unit,
-  onRequestExit: () -> Unit,
+  onSelectThemeMode: (AppThemeMode) -> Unit,
   onDismiss: () -> Unit,
 ) {
   val voltColors = LocalVoltColors.current
@@ -255,14 +352,16 @@ fun LibrarySettingsSheet(
     Column(
       modifier = Modifier.fillMaxWidth().heightIn(min = 420.dp, max = 660.dp).padding(bottom = 16.dp)
     ) {
+      // Standardized Page Commands Row (No duplicate Media Hub or Exit)
       Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         QuickActionChip(
           icon = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
           label = if (isBookmarked) "Saved" else "Bookmark",
           enabled = !activeTab.isSpeedDial,
+          isActive = isBookmarked,
           onClick = {
             onToggleBookmark()
             onDismiss()
@@ -280,14 +379,26 @@ fun LibrarySettingsSheet(
           modifier = Modifier.weight(1f),
         )
         QuickActionChip(
-          icon = Icons.Default.FolderOpen,
-          label = "Media Hub",
+          icon = Icons.Default.DesktopWindows,
+          label = "Desktop",
           enabled = true,
+          isActive = settings.desktopModeEnabled,
+          onClick = {
+            onToggleDesktopMode(!settings.desktopModeEnabled)
+            onDismiss()
+          },
+          modifier = Modifier.weight(1f).testTag("menu_desktop_mode_button"),
+        )
+        QuickActionChip(
+          icon = if (isBrowserFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+          label = if (isBrowserFullscreen) "Window" else "Fullscreen",
+          enabled = true,
+          isActive = isBrowserFullscreen,
           onClick = {
             onDismiss()
-            onOpenMediaHub()
+            onToggleBrowserFullscreen()
           },
-          modifier = Modifier.weight(1f),
+          modifier = Modifier.weight(1f).testTag("menu_fullscreen_button"),
         )
         QuickActionChip(
           icon = Icons.Default.Share,
@@ -299,21 +410,13 @@ fun LibrarySettingsSheet(
           },
           modifier = Modifier.weight(1f),
         )
-        QuickActionChip(
-          icon = Icons.Default.PowerSettingsNew,
-          label = "Exit",
-          enabled = true,
-          tint = MaterialTheme.colorScheme.error,
-          onClick = onRequestExit,
-          modifier = Modifier.weight(1f).testTag("menu_exit_erase_button"),
-        )
       }
 
       Spacer(modifier = Modifier.height(8.dp))
 
       TabRow(selectedTabIndex = selectedTab, containerColor = Color.Transparent) {
         Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Bookmarks") })
-        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Zero-Trace Engine") })
+        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Engine & Look") })
       }
 
       when (selectedTab) {
@@ -335,6 +438,7 @@ fun LibrarySettingsSheet(
               Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = voltColors.cardSurface,
+                border = BorderStroke(1.dp, voltColors.cardBorder),
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable {
                   onOpenUrl(bm.url)
                   onDismiss()
@@ -382,11 +486,7 @@ fun LibrarySettingsSheet(
               Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = voltColors.emeraldShield.copy(alpha = 0.12f),
-                border =
-                  androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    voltColors.emeraldShield.copy(alpha = 0.4f),
-                  ),
+                border = BorderStroke(1.dp, voltColors.emeraldShield.copy(alpha = 0.4f)),
               ) {
                 Column(
                   modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -407,7 +507,156 @@ fun LibrarySettingsSheet(
               }
             }
 
+            // Blocker quick link (no duplicate 4-way selector — points to Security Sheet)
             item {
+              Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = voltColors.cardSurface,
+                border = BorderStroke(1.dp, voltColors.cardBorder),
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable {
+                      onDismiss()
+                      onOpenSecuritySheet()
+                    },
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(14.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                      text = "AdGuard & Blocker Profile",
+                      style = MaterialTheme.typography.titleSmall,
+                      color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                      text = "${settings.adBlockerType.displayName} • ${settings.cumulativeTrackersBlocked} blocked • ${formatBytes(settings.cumulativeBytesSaved)} saved",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = voltColors.emeraldShield,
+                    )
+                  }
+                  Text(
+                    text = settings.adBlockerType.badgeLabel,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = voltColors.cyanAccent,
+                  )
+                }
+              }
+            }
+
+            item {
+              Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = voltColors.cyanAccent.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.4f)),
+              ) {
+                Column(
+                  modifier = Modifier.fillMaxWidth().padding(14.dp),
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                      Text(
+                        text = "Super Data Saver Mode",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = voltColors.cyanAccent,
+                      )
+                      Text(
+                        text = "Total Data Saved: ${formatBytes(settings.cumulativeBytesSaved)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                      )
+                    }
+                    Switch(
+                      checked = settings.liteModeEnabled,
+                      onCheckedChange = onToggleLiteMode,
+                      modifier = Modifier.testTag("data_saver_switch"),
+                    )
+                  }
+                  Text(
+                    text = "Aggressively blocks remote images, webfonts, and heavy tracking payloads to save up to 70% mobile bandwidth.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+            }
+
+            // Canonical App Theme Selector (Single Source — no duplicate on Speed Dial)
+            item {
+              Text(
+                text = "App Theme & Look",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Spacer(modifier = Modifier.height(8.dp))
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                AppThemeMode.entries.forEach { mode ->
+                  val selected = settings.themeMode == mode
+                  val swatchColor =
+                    if (mode == AppThemeMode.CYBER_OBSIDIAN) VoltCyan else Color(0xFF0284C7)
+                  val cardShape = RoundedCornerShape(14.dp)
+                  Surface(
+                    shape = cardShape,
+                    color =
+                      if (selected) voltColors.cyanAccent.copy(alpha = 0.14f)
+                      else voltColors.cardSurface,
+                    border =
+                      BorderStroke(
+                        width = if (selected) 1.5.dp else 1.dp,
+                        color = if (selected) voltColors.cyanAccent else voltColors.cardBorder,
+                      ),
+                    modifier =
+                      Modifier.weight(1f)
+                        .clip(cardShape)
+                        .clickable { onSelectThemeMode(mode) }
+                        .testTag("settings_theme_${mode.name.lowercase()}"),
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                      Box(
+                        modifier =
+                          Modifier.size(12.dp)
+                            .clip(CircleShape)
+                            .background(swatchColor)
+                      )
+                      Text(
+                        text = mode.displayName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                      )
+                      if (selected) {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = "Selected",
+                          tint = voltColors.cyanAccent,
+                          modifier = Modifier.size(16.dp),
+                        )
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            item {
+              Spacer(modifier = Modifier.height(4.dp))
               Text(
                 text = "Default Search Engine",
                 style = MaterialTheme.typography.titleMedium,
@@ -416,15 +665,16 @@ fun LibrarySettingsSheet(
               Spacer(modifier = Modifier.height(6.dp))
               SearchEngine.entries.forEach { engine ->
                 val selected = settings.searchEngine == engine
+                val cardShape = RoundedCornerShape(14.dp)
                 Surface(
-                  shape = RoundedCornerShape(14.dp),
+                  shape = cardShape,
                   color =
                     if (selected) voltColors.cyanAccent.copy(alpha = 0.14f)
                     else voltColors.cardSurface,
                   modifier =
                     Modifier.fillMaxWidth()
                       .padding(vertical = 3.dp)
-                      .clip(RoundedCornerShape(14.dp))
+                      .clip(cardShape)
                       .clickable { onSelectSearchEngine(engine) },
                 ) {
                   Row(
@@ -455,58 +705,6 @@ fun LibrarySettingsSheet(
                 }
               }
             }
-
-            item {
-              HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-              Spacer(modifier = Modifier.height(8.dp))
-              OutlinedButton(
-                onClick = {
-                  onWipeSessionNow()
-                  onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Wipe Session Cookies & Cache")
-              }
-              Spacer(modifier = Modifier.height(8.dp))
-              Button(
-                onClick = onRequestExit,
-                colors =
-                  ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                  ),
-                modifier = Modifier.fillMaxWidth().testTag("settings_exit_erase_button"),
-              ) {
-                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Exit & Erase All Device Traces")
-              }
-              Spacer(modifier = Modifier.height(8.dp))
-              Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = voltColors.cardSurface,
-              ) {
-                Row(
-                  modifier = Modifier.fillMaxWidth().padding(14.dp),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                  Text(
-                    text = "Shield Savings",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                  Text(
-                    text =
-                      "${settings.cumulativeTrackersBlocked} blocked • ${formatBytes(settings.cumulativeBytesSaved)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = voltColors.emeraldShield,
-                  )
-                }
-              }
-            }
           }
         }
       }
@@ -521,6 +719,7 @@ private fun QuickActionChip(
   enabled: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  isActive: Boolean = false,
   tint: Color? = null,
 ) {
   val voltColors = LocalVoltColors.current
@@ -531,10 +730,13 @@ private fun QuickActionChip(
         .clip(RoundedCornerShape(14.dp))
         .clickable(enabled = enabled, onClick = onClick),
     shape = RoundedCornerShape(14.dp),
-    color = voltColors.cardSurface,
+    color = if (isActive) activeTint.copy(alpha = 0.16f) else voltColors.cardSurface,
+    border =
+      if (isActive) BorderStroke(1.dp, activeTint.copy(alpha = 0.55f))
+      else BorderStroke(1.dp, voltColors.cardBorder),
   ) {
     Column(
-      modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
+      modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -544,7 +746,7 @@ private fun QuickActionChip(
         tint =
           if (enabled) activeTint
           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-        modifier = Modifier.size(20.dp),
+        modifier = Modifier.size(19.dp),
       )
       Text(
         text = label,
@@ -553,6 +755,7 @@ private fun QuickActionChip(
           if (enabled) MaterialTheme.colorScheme.onSurface
           else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
         maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
       )
     }
   }
@@ -686,5 +889,62 @@ fun ExitConfirmDialog(
         Text("Cancel")
       }
     },
+  )
+}
+
+@Composable
+fun OmniSearchDialog(
+  onConfirmMultiQuery: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  var queryText by remember { mutableStateOf("") }
+  val voltColors = LocalVoltColors.current
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    icon = {
+      Icon(
+        imageVector = Icons.Default.Speed,
+        contentDescription = null,
+        tint = voltColors.cyanAccent,
+      )
+    },
+    title = { Text("Omni-Engine Multi-Search") },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          text = "Enter a search term to query SearXNG, Mojeek, Marginalia, Brave, and DuckDuckGo simultaneously in parallel tabs.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = queryText,
+          onValueChange = { queryText = it },
+          placeholder = { Text("Search all engines at once...") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth().testTag("omni_search_input"),
+        )
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = {
+          if (queryText.isNotBlank()) {
+            onConfirmMultiQuery(queryText)
+            onDismiss()
+          }
+        },
+        enabled = queryText.isNotBlank(),
+        modifier = Modifier.testTag("omni_search_confirm_button"),
+      ) {
+        Text("Search All Engines")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Cancel")
+      }
+    },
+    containerColor = MaterialTheme.colorScheme.surface,
   )
 }

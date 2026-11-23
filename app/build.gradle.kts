@@ -56,8 +56,9 @@ android {
     }
   }
   compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    isCoreLibraryDesugaringEnabled = true
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
   }
   buildFeatures {
     compose = true
@@ -127,6 +128,8 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
+  coreLibraryDesugaring(libs.desugar.jdk.libs)
+  implementation(libs.wireguard.tunnel)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)

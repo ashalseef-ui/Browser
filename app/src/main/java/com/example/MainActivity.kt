@@ -10,9 +10,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.AppThemeMode
 import com.example.ui.BrowserViewModel
 import com.example.ui.VoltBrowserScreen
 import com.example.ui.theme.VoltBrowserTheme
@@ -28,7 +33,17 @@ class MainActivity : ComponentActivity() {
     handleIncomingIntent(intent)
 
     setContent {
-      VoltBrowserTheme {
+      val settings by viewModel.settings.collectAsStateWithLifecycle()
+      val isLightTheme = settings.themeMode == AppThemeMode.ZEN_LIGHT
+      val view = LocalView.current
+      if (!view.isInEditMode) {
+        SideEffect {
+          val controller = WindowCompat.getInsetsController(window, view)
+          controller.isAppearanceLightStatusBars = isLightTheme
+          controller.isAppearanceLightNavigationBars = isLightTheme
+        }
+      }
+      VoltBrowserTheme(themeMode = settings.themeMode) {
         VoltBrowserScreen(
           viewModel = viewModel,
           isInPipMode = isInPipMode,

@@ -75,6 +75,16 @@ interface DownloadDao {
     localPath: String,
   )
 
+  @Query(
+    "UPDATE downloads SET fileName = :fileName, mimeType = :mimeType, localPath = :localPath WHERE id = :id"
+  )
+  suspend fun updateMetadata(
+    id: Long,
+    fileName: String,
+    mimeType: String,
+    localPath: String,
+  )
+
   @Query("DELETE FROM downloads WHERE id = :id")
   suspend fun deleteById(id: Long)
 

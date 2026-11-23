@@ -38,10 +38,28 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `turbo shield blocks known tracker subdomains and allows regular content`() {
+  fun `turbo shield blocks known tracker subdomains and respects blocker tiers`() {
     assertTrue(TurboShield.shouldBlock(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js")))
     assertTrue(TurboShield.shouldBlock(Uri.parse("https://www.google-analytics.com/analytics.js")))
     assertFalse(TurboShield.shouldBlock(Uri.parse("https://en.wikipedia.org/wiki/Android")))
+
+    val adGuardUri = Uri.parse("https://cdn.ezoic.net/ezoic/sa.min.js")
+    val popupUri = Uri.parse("https://srv.popads.net/pop.js")
+    assertFalse(TurboShield.shouldBlock(adGuardUri, com.example.data.AdBlockerType.OFF))
+    assertFalse(TurboShield.shouldBlock(adGuardUri, com.example.data.AdBlockerType.STANDARD))
+    assertTrue(TurboShield.shouldBlock(adGuardUri, com.example.data.AdBlockerType.ADGUARD))
+    assertFalse(TurboShield.shouldBlock(popupUri, com.example.data.AdBlockerType.ADGUARD))
+    assertTrue(TurboShield.shouldBlock(popupUri, com.example.data.AdBlockerType.STRICT))
+
+    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.OFF))
+    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STANDARD))
+    val adgScript = TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.ADGUARD)
+    assertNotNull(adgScript)
+    assertTrue(adgScript!!.contains("adsbygoogle"))
+    val strictScript = TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STRICT)
+    assertNotNull(strictScript)
+    assertTrue(strictScript!!.contains("__voltPopupGuard"))
+    assertEquals(com.example.data.AdBlockerType.ADGUARD, com.example.data.BrowserSettings().adBlockerType)
   }
 
   @Test
@@ -352,5 +370,251 @@ class ExampleRobolectricTest {
     assertFalse(appWebViewDir.exists())
     assertFalse(prefsTrace.exists())
     assertTrue(datastoreFile.exists())
+  }
+
+  @Test
+  fun `data saver blocks heavy images and webfonts while allowing html pages and svg icons`() {
+    val (blockImg, imgBytes) = com.example.browser.VoltDataSaver.shouldBlockForDataSaver(Uri.parse("https://cdn.example.com/hero.webp?w=1200"))
+    assertTrue(blockImg)
+    assertTrue(imgBytes > 0L)
+
+    val (blockFont, fontBytes) = com.example.browser.VoltDataSaver.shouldBlockForDataSaver(Uri.parse("https://fonts.example.com/inter.woff2"))
+    assertTrue(blockFont)
+    assertTrue(fontBytes > 0L)
+
+    val (blockSvg, _) = com.example.browser.VoltDataSaver.shouldBlockForDataSaver(Uri.parse("https://cdn.example.com/icons/menu.svg"))
+    assertFalse(blockSvg)
+
+    val (blockVideo, _) = com.example.browser.VoltDataSaver.shouldBlockForDataSaver(Uri.parse("https://cdn.example.com/clip.mp4"))
+    assertFalse(blockVideo)
+  }
+
+  @Test
+  fun `all search engines and theme modes resolve clean urls and states`() {
+    assertEquals(2, com.example.data.AppThemeMode.entries.size)
+    assertTrue(com.example.data.AppThemeMode.entries.contains(com.example.data.AppThemeMode.CYBER_OBSIDIAN))
+    assertTrue(com.example.data.AppThemeMode.entries.contains(com.example.data.AppThemeMode.ZEN_LIGHT))
+    assertTrue(com.example.data.SearchEngine.entries.size >= 12)
+    com.example.data.SearchEngine.entries.forEach { engine ->
+      val queryUrl = VoltSpeedEngine.normalizeInputToUrl("privacy browser", engine)
+      assertNotNull(queryUrl)
+      assertTrue(queryUrl!!.startsWith("https://"))
+    }
+    assertEquals(
+      "https://priv.au/search?q=privacy+browser",
+      VoltSpeedEngine.normalizeInputToUrl("privacy browser", SearchEngine.SEARXNG),
+    )
+    assertEquals(
+      "https://search.marginalia.nu/search?query=privacy+browser",
+      VoltSpeedEngine.normalizeInputToUrl("privacy browser", SearchEngine.MARGINALIA),
+    )
+    assertEquals(
+      "https://yacy.searchlab.eu/yacysearch.html?query=privacy+browser",
+      VoltSpeedEngine.normalizeInputToUrl("privacy browser", SearchEngine.YACY),
+    )
+  }
+
+  @Test
+  fun `expanded doh resolvers custom proxy parser and startup defaults work accurately`() {
+    assertEquals(9, com.example.vpn.DohProvider.entries.size)
+    com.example.vpn.DohProvider.entries.forEach { provider ->
+      assertTrue(provider.endpointUrl.startsWith("https://"))
+    }
+
+    assertTrue(PublicRelayManager.isPublicRoutableIp("198.51.100.42"))
+    assertFalse(PublicRelayManager.isPublicRoutableIp("127.0.0.1"))
+    assertFalse(PublicRelayManager.isPublicRoutableIp("192.168.1.1"))
+    assertFalse(PublicRelayManager.isPublicRoutableIp("10.0.0.5"))
+
+    val custom = PublicRelayManager.parseSingleProxy("socks5://203.0.113.25:1080", "SOCKS5")
+    assertNotNull(custom)
+    assertEquals("203.0.113.25", custom!!.ip)
+    assertEquals(1080, custom.port)
+    assertEquals("SOCKS5", custom.protocol)
+    assertNull(custom.username)
+
+    val authUrlProxy = PublicRelayManager.parseSingleProxy("http://alice:s3cr3t@198.51.100.88:3128", "HTTP")
+    assertNotNull(authUrlProxy)
+    assertEquals("198.51.100.88", authUrlProxy!!.ip)
+    assertEquals(3128, authUrlProxy.port)
+    assertEquals("alice", authUrlProxy.username)
+    assertEquals("s3cr3t", authUrlProxy.password)
+    assertTrue(authUrlProxy.hasAuthentication)
+
+    val authColonProxy = PublicRelayManager.parseSingleProxy("198.51.100.99:1080:bob:pass42", "SOCKS5")
+    assertNotNull(authColonProxy)
+    assertEquals("bob", authColonProxy!!.username)
+    assertEquals("pass42", authColonProxy.password)
+
+    assertNull(PublicRelayManager.parseSingleProxy("127.0.0.1:8080", "HTTP"))
+
+    val defaultSettings = com.example.data.BrowserSettings()
+    assertFalse(defaultSettings.autoWireGuardOnLaunchEnabled)
+    assertFalse(defaultSettings.autoProxyOnLaunchEnabled)
+    assertFalse(defaultSettings.autoDnsVpnOnLaunchEnabled)
+
+    val warpConf =
+      com.example.vpn.WireGuardManager.buildWarpConfigString(
+        privateKeyBase64 = "cPrivKeyBase64Placeholder0000000000000000000=",
+        peerPublicKeyBase64 = com.example.vpn.WireGuardManager.DEFAULT_WARP_PUBLIC_KEY,
+        clientIpv4 = "172.16.0.2",
+        endpoint = "162.159.192.1:2408",
+      )
+    assertTrue(com.example.vpn.WireGuardManager.hasValidWireGuardSections(warpConf))
+    assertEquals("162.159.192.1:2408", com.example.vpn.WireGuardManager.parseEndpointFromConf(warpConf))
+    assertTrue(warpConf.contains("Address = 172.16.0.2/32"))
+    assertTrue(warpConf.contains("MTU = 1280"))
+
+    val relays =
+      listOf(
+        com.example.vpn.PublicRelayNode("198.51.100.1", 8080, "United States", "US", "HTTP", "elite", latencyMs = 90L, isReachable = true),
+        com.example.vpn.PublicRelayNode("198.51.100.2", 8080, "India", "IN", "HTTP", "elite", latencyMs = 240L, isReachable = true),
+        com.example.vpn.PublicRelayNode("198.51.100.3", 1080, "Germany", "DE", "SOCKS5", "elite", latencyMs = 180L, isReachable = true),
+        com.example.vpn.PublicRelayNode("198.51.100.4", 8080, "Germany", "DE", "HTTP", "elite", latencyMs = null, isReachable = false),
+      ).sortedWith(PublicRelayManager.relayRankingComparator)
+    assertEquals("DE", relays[0].countryCode)
+    assertEquals("IN", relays[1].countryCode)
+    assertEquals("US", relays[2].countryCode)
+    assertFalse(relays[3].isReachable == true)
+  }
+
+  @Test
+  fun `media downloader supports all file extensions dispositions mime resolution and data urls`() {
+    assertEquals(
+      "Q4 Report Final.pdf",
+      com.example.media.MediaDownloader.parseDispositionFileName(
+        "attachment; filename*=UTF-8''Q4%20Report%20Final.pdf"
+      ),
+    )
+    assertEquals(
+      "bundle-v2.zip",
+      com.example.media.MediaDownloader.parseDispositionFileName(
+        """attachment; filename="bundle-v2.zip""""
+      ),
+    )
+
+    val longName =
+      "very_long_download_filename_that_exceeds_eighty_characters_for_sure_without_losing_ext_final.apk"
+    val sanitized = com.example.media.MediaDownloader.sanitizeFileNamePreservingExtension(longName)
+    assertTrue(sanitized.endsWith(".apk"))
+    assertTrue(sanitized.length <= 80)
+
+    assertEquals(
+      "application/pdf",
+      com.example.media.MediaDownloader.resolveMimeType("manual.pdf", "application/octet-stream"),
+    )
+    assertEquals(
+      "application/zip",
+      com.example.media.MediaDownloader.resolveMimeType("archive.zip", null),
+    )
+    assertEquals(
+      "application/vnd.android.package-archive",
+      com.example.media.MediaDownloader.resolveMimeType("installer.apk", "application/octet-stream"),
+    )
+    assertEquals(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      com.example.media.MediaDownloader.resolveMimeType("notes.docx", "application/octet-stream"),
+    )
+
+    val guessedPdf =
+      com.example.media.MediaDownloader.guessDownloadFileName(
+        url = "https://example.com/export?id=99",
+        contentDisposition = "attachment; filename=\"invoice_99.pdf\"",
+        mimeType = "application/octet-stream",
+        isAdaptiveStream = false,
+      )
+    assertEquals("invoice_99.pdf", guessedPdf)
+
+    val guessedZipFromMime =
+      com.example.media.MediaDownloader.guessDownloadFileName(
+        url = "https://example.com/archive/build",
+        contentDisposition = null,
+        mimeType = "application/zip",
+        isAdaptiveStream = false,
+      )
+    assertEquals("build.zip", guessedZipFromMime)
+
+    val decodedBase64 =
+      com.example.media.MediaDownloader.parseDataUrl("data:text/plain;base64,SGVsbG8gVm9sdA==")
+    assertNotNull(decodedBase64)
+    assertEquals("text/plain", decodedBase64!!.mimeType)
+    assertEquals("Hello Volt", String(decodedBase64.bytes))
+
+    val decodedCsv =
+      com.example.media.MediaDownloader.parseDataUrl("data:text/csv;charset=utf-8,col1%2Ccol2%0A1%2C2")
+    assertNotNull(decodedCsv)
+    assertEquals("text/csv", decodedCsv!!.mimeType)
+    assertEquals("col1,col2\n1,2", String(decodedCsv.bytes))
+  }
+
+  @Test
+  fun `compact data usage counter formats bytes kilobytes megabytes and gigabytes cleanly`() {
+    assertEquals("0B", com.example.ui.components.formatCompactDataCounter(0L))
+    assertEquals("512B", com.example.ui.components.formatCompactDataCounter(512L))
+    assertEquals("42K", com.example.ui.components.formatCompactDataCounter(42 * 1024L))
+    assertEquals("1.5M", com.example.ui.components.formatCompactDataCounter(1_572_864L))
+    assertEquals("250M", com.example.ui.components.formatCompactDataCounter(250 * 1024L * 1024L))
+    assertEquals("1.5G", com.example.ui.components.formatCompactDataCounter(1_610_612_736L))
+  }
+
+  @Test
+  fun `long press context resolver handles links images media links video elements and plain text`() {
+    val anchor =
+      com.example.browser.WebViewTabPool.resolveContextTarget(
+        pageUrl = "https://example.com",
+        hitType = android.webkit.WebView.HitTestResult.SRC_ANCHOR_TYPE,
+        hitExtra = "https://example.com/article",
+        domTarget = com.example.data.WebContextMenuTarget(linkText = "Read Article"),
+      )
+    assertNotNull(anchor)
+    assertEquals("https://example.com/article", anchor!!.linkUrl)
+    assertEquals("Read Article", anchor.linkText)
+    assertNull(anchor.mediaUrl)
+
+    val mediaLink =
+      com.example.browser.WebViewTabPool.resolveContextTarget(
+        pageUrl = "https://example.com/watch",
+        hitType = android.webkit.WebView.HitTestResult.SRC_ANCHOR_TYPE,
+        hitExtra = "https://cdn.example.com/clip.mp4",
+        domTarget = com.example.data.WebContextMenuTarget(linkText = "Download Video"),
+      )
+    assertNotNull(mediaLink)
+    assertEquals("https://cdn.example.com/clip.mp4", mediaLink!!.mediaUrl)
+    assertEquals(MediaKind.VIDEO, mediaLink.mediaKind)
+
+    val videoDom =
+      com.example.browser.WebViewTabPool.resolveContextTarget(
+        pageUrl = "https://example.com/player",
+        hitType = android.webkit.WebView.HitTestResult.UNKNOWN_TYPE,
+        hitExtra = null,
+        domTarget =
+          com.example.data.WebContextMenuTarget(
+            mediaUrl = "https://cdn.example.com/live/master.m3u8",
+            mediaTitle = "Live Stream",
+            imageUrl = "https://cdn.example.com/poster.jpg",
+          ),
+      )
+    assertNotNull(videoDom)
+    assertEquals("https://cdn.example.com/live/master.m3u8", videoDom!!.mediaUrl)
+    assertEquals(MediaKind.STREAM_HLS, videoDom.mediaKind)
+    assertEquals("https://cdn.example.com/poster.jpg", videoDom.imageUrl)
+
+    val editField =
+      com.example.browser.WebViewTabPool.resolveContextTarget(
+        pageUrl = "https://example.com",
+        hitType = android.webkit.WebView.HitTestResult.EDIT_TEXT_TYPE,
+        hitExtra = null,
+        domTarget = com.example.data.WebContextMenuTarget(linkUrl = "https://example.com"),
+      )
+    assertNull(editField)
+
+    val plainText =
+      com.example.browser.WebViewTabPool.resolveContextTarget(
+        pageUrl = "https://example.com",
+        hitType = android.webkit.WebView.HitTestResult.UNKNOWN_TYPE,
+        hitExtra = null,
+        domTarget = null,
+      )
+    assertNull(plainText)
   }
 }

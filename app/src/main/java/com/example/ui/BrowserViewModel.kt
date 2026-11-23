@@ -19,6 +19,8 @@ import com.example.browser.PlaylistResolver
 import com.example.browser.TabWebCallbacks
 import com.example.browser.VoltSpeedEngine
 import com.example.browser.WebViewTabPool
+import com.example.data.AdBlockerType
+import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserSettings
 import com.example.data.BrowserTabState
@@ -26,6 +28,8 @@ import com.example.data.DetectedMediaItem
 import com.example.data.DownloadItemEntity
 import com.example.data.MediaKind
 import com.example.data.SearchEngine
+import com.example.data.SocialAppShortcut
+import com.example.data.WebContextMenuTarget
 import com.example.media.MediaDownloader
 import com.example.media.MediaPlaybackManager
 import com.example.media.MediaPlayerUiState
@@ -35,11 +39,15 @@ import com.example.vpn.PublicRelayManager
 import com.example.vpn.PublicRelayNode
 import com.example.vpn.VoltVpnService
 import com.example.vpn.VpnTunnelState
+import com.example.vpn.WireGuardManager
+import com.example.vpn.WireGuardMode
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +70,7 @@ enum class BrowserSheet {
   ADD_SPEED_DIAL,
   VPN,
   EXIT_CONFIRM,
+  OMNI_SEARCH,
 }
 
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
@@ -75,6 +84,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   private val mediaDownloader =
     MediaDownloader(application, speedEngine.okHttpClient, repository, viewModelScope)
   private val relayManager = PublicRelayManager()
+  private val wireGuardManager = WireGuardManager(application)
+  private var wireGuardStatsJob: Job? = null
   private val skippedRelayIds = mutableSetOf<String>()
   private var lastFailoverTimestamp = 0L
   private val activeMediaScans = ConcurrentHashMap<String, AtomicInteger>()
@@ -129,6 +140,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   val fullscreenCustomView: StateFlow<Pair<View, WebChromeClient.CustomViewCallback>?> =
     _fullscreenCustomView.asStateFlow()
 
+  private val _isBrowserFullscreen = MutableStateFlow(false)
+  val isBrowserFullscreen: StateFlow<Boolean> = _isBrowserFullscreen.asStateFlow()
+
+  private val _contextMenuTarget = MutableStateFlow<WebContextMenuTarget?>(null)
+  val contextMenuTarget: StateFlow<WebContextMenuTarget?> = _contextMenuTarget.asStateFlow()
+
   private val _toastMessage = MutableStateFlow<String?>(null)
   val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
@@ -146,6 +163,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         )
       }
       .stateIn(viewModelScope, SharingStarted.Eagerly, VpnTunnelState())
+
+  private val _sessionDataUsedBytes = MutableStateFlow(0L)
+  val sessionDataUsedBytes: StateFlow<Long> = _sessionDataUsedBytes.asStateFlow()
+
+  private val _socialSidebarOpen = MutableStateFlow(false)
+  val socialSidebarOpen: StateFlow<Boolean> = _socialSidebarOpen.asStateFlow()
+
+  private val _socialApps = MutableStateFlow<List<SocialAppShortcut>>(emptyList())
+  val socialApps: StateFlow<List<SocialAppShortcut>> = _socialApps.asStateFlow()
+
+  private val _hasSystemAutofill = MutableStateFlow(false)
+  val hasSystemAutofill: StateFlow<Boolean> = _hasSystemAutofill.asStateFlow()
 
   val tabWebCallbacks: TabWebCallbacks =
     object : TabWebCallbacks {
@@ -227,7 +256,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         contentDisposition: String,
         mimeType: String,
       ) {
-        downloadMedia(url = url, fileName = null, mimeType = mimeType)
+        downloadMedia(
+          url = url,
+          fileName = null,
+          mimeType = mimeType,
+          contentDisposition = contentDisposition,
+        )
       }
 
       override fun onOpenNewTabRequested(url: String) {
@@ -263,20 +297,86 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _vpnRelayState.update { it.copy(autoFailoversCount = it.autoFailoversCount + 1) }
         rotateToNextProxy(reloadActiveTab = tabId == activeTab.value.id)
       }
+
+      override fun onContextMenuRequested(tabId: String, target: WebContextMenuTarget) {
+        if (tabId == activeTab.value.id) {
+          _contextMenuTarget.value = target
+        }
+      }
     }
 
   init {
+    webViewPool.proxyCredentialsProvider = { speedEngine.getActiveProxyCredentials() }
+    refreshSocialAppStates()
+    val baselineUidBytes = readAppUidTotalBytes()
     viewModelScope.launch {
-      repository.initializeCleanSession()
-      webViewPool.wipeAllCacheAndCookies()
+      while (true) {
+        val currentUidBytes = readAppUidTotalBytes()
+        val trafficDelta =
+          if (baselineUidBytes != null && currentUidBytes != null) {
+            (currentUidBytes - baselineUidBytes).coerceAtLeast(0L)
+          } else {
+            0L
+          }
+        val dlBytes = downloads.value.sumOf { it.downloadedBytes.coerceAtLeast(0L) }
+        _sessionDataUsedBytes.value = maxOf(trafficDelta, dlBytes)
+        delay(1500L)
+      }
+    }
+    viewModelScope.launch {
+      withContext(Dispatchers.IO) {
+        repository.initializeCleanSession()
+        repository.preferences.ensureStartupVpnOffDefault()
+      }
       val initialSettings = repository.settings.first()
-      if (initialSettings.autoProxyOnLaunchEnabled) {
-        autoConnectFastestRelay()
+      _vpnRelayState.update {
+        it.copy(
+          activeDohProvider = initialSettings.preferredDohProvider,
+          hasSavedWarpConfig = initialSettings.savedWarpConf.isNotBlank(),
+          hasSavedCustomWgConf = initialSettings.savedCustomWgConf.isNotBlank(),
+        )
+      }
+
+      var startedWireGuardOnBoot = false
+      if (initialSettings.autoWireGuardOnLaunchEnabled && VpnService.prepare(app) == null) {
+        when {
+          initialSettings.preferredWireGuardMode == WireGuardMode.CUSTOM_CONF &&
+            initialSettings.savedCustomWgConf.isNotBlank() -> {
+            startedWireGuardOnBoot = true
+            connectCustomWireGuardConf(
+              rawConf = initialSettings.savedCustomWgConf,
+              profileName = initialSettings.savedCustomWgName.ifBlank { "Custom WireGuard" },
+              persistConfig = false,
+            )
+          }
+          initialSettings.savedWarpConf.isNotBlank() -> {
+            startedWireGuardOnBoot = true
+            connectCloudflareWarp(silentStartup = true)
+          }
+        }
+      }
+
+      if (!startedWireGuardOnBoot && initialSettings.autoDnsVpnOnLaunchEnabled && VpnService.prepare(app) == null) {
+        startDnsVpnService()
+      }
+      if (!startedWireGuardOnBoot && initialSettings.autoProxyOnLaunchEnabled) {
+        autoConnectFastestRelay(fastStartup = true)
+      }
+      // Run WebView cookie/storage cleanup after initial composition so first frame stays instant
+      delay(300L)
+      if (_tabs.value.all { it.isSpeedDial }) {
+        webViewPool.wipeAllCacheAndCookies()
       }
     }
     viewModelScope.launch {
       settings.collect { currentSettings ->
         webViewPool.refreshSettings(currentSettings)
+        _vpnRelayState.update {
+          it.copy(
+            hasSavedWarpConfig = currentSettings.savedWarpConf.isNotBlank(),
+            hasSavedCustomWgConf = currentSettings.savedCustomWgConf.isNotBlank(),
+          )
+        }
       }
     }
     mediaManager.connect()
@@ -346,6 +446,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     updateTab(current.id) {
       it.copy(isSpeedDial = true, title = "Speed Dial", isLoading = false, progress = 0)
     }
+    _isBrowserFullscreen.value = false
     _activeSheet.value = BrowserSheet.NONE
   }
 
@@ -371,6 +472,50 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       val wv = webViewPool.getOrCreateWebView(newTab.id, isIncognito, tabWebCallbacks)
       wv.loadUrl(resolvedUrl)
     }
+  }
+
+  fun openOmniMultiQuery(query: String) {
+    val trimmed = query.trim()
+    if (trimmed.isBlank()) return
+    val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+    val engines =
+      listOf(
+        SearchEngine.SEARXNG,
+        SearchEngine.MOJEEK,
+        SearchEngine.MARGINALIA,
+        SearchEngine.BRAVE,
+        SearchEngine.DUCKDUCKGO,
+      )
+    val urls = engines.map { it.searchUrlTemplate.replace("%s", encoded) }
+    urls.forEachIndexed { index, url ->
+      if (index == 0) {
+        navigate(url)
+      } else {
+        newTab(isIncognito = activeTab.value.isIncognito, initialUrl = url)
+      }
+    }
+    _activeSheet.value = BrowserSheet.NONE
+    showMessage("Launched parallel search across ${engines.size} independent engines")
+  }
+
+  fun switchToNextTab() {
+    val list = _tabs.value
+    if (list.size <= 1) return
+    val currentIndex = list.indexOfFirst { it.id == _activeTabId.value }
+    if (currentIndex == -1) return
+    val nextIndex = (currentIndex + 1) % list.size
+    _activeTabId.value = list[nextIndex].id
+    _activeSheet.value = BrowserSheet.NONE
+  }
+
+  fun switchToPreviousTab() {
+    val list = _tabs.value
+    if (list.size <= 1) return
+    val currentIndex = list.indexOfFirst { it.id == _activeTabId.value }
+    if (currentIndex == -1) return
+    val prevIndex = (currentIndex - 1 + list.size) % list.size
+    _activeTabId.value = list[prevIndex].id
+    _activeSheet.value = BrowserSheet.NONE
   }
 
   fun selectTab(tabId: String) {
@@ -428,6 +573,89 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun exitHtmlFullscreen() {
     _fullscreenCustomView.value?.second?.onCustomViewHidden()
     _fullscreenCustomView.value = null
+  }
+
+  fun toggleBrowserFullscreen(enabled: Boolean? = null) {
+    val next = enabled ?: !_isBrowserFullscreen.value
+    _isBrowserFullscreen.value = next
+    _activeSheet.value = BrowserSheet.NONE
+  }
+
+  fun showContextMenu(target: WebContextMenuTarget) {
+    _contextMenuTarget.value = target
+  }
+
+  fun dismissContextMenu() {
+    _contextMenuTarget.value = null
+  }
+
+  fun playMediaUrlInternally(
+    url: String,
+    title: String?,
+    kind: MediaKind?,
+    pageUrl: String,
+  ) {
+    _contextMenuTarget.value = null
+    _activeSheet.value = BrowserSheet.NONE
+    val resolvedKind =
+      kind
+        ?: MediaSniffer.classifyUrl(url, pageUrl, title.orEmpty())?.kind
+        ?: MediaKind.VIDEO
+    val resolvedMime =
+      when (resolvedKind) {
+        MediaKind.AUDIO -> "audio/*"
+        MediaKind.STREAM_HLS -> "application/x-mpegURL"
+        MediaKind.STREAM_DASH -> "application/dash+xml"
+        else -> "video/mp4"
+      }
+    val item =
+      DetectedMediaItem(
+        url = url,
+        title = title?.takeIf { it.isNotBlank() } ?: url.substringAfterLast('/').substringBefore('?').ifBlank { "Web Media" },
+        kind = resolvedKind,
+        mimeType = resolvedMime,
+        sourcePageUrl = pageUrl,
+      )
+    mediaManager.playMedia(item)
+  }
+
+  fun openMediaUrlExternally(
+    url: String,
+    title: String?,
+    kind: MediaKind?,
+    pageUrl: String,
+  ) {
+    _contextMenuTarget.value = null
+    val resolvedKind =
+      kind
+        ?: MediaSniffer.classifyUrl(url, pageUrl, title.orEmpty())?.kind
+        ?: MediaKind.VIDEO
+    val item =
+      DetectedMediaItem(
+        url = url,
+        title = title?.takeIf { it.isNotBlank() } ?: "Web Media",
+        kind = resolvedKind,
+        mimeType = if (resolvedKind == MediaKind.AUDIO) "audio/*" else "video/*",
+        sourcePageUrl = pageUrl,
+      )
+    openInExternalPlayer(item)
+  }
+
+  fun shareUrl(url: String, title: String? = null) {
+    _contextMenuTarget.value = null
+    val trimmed = url.trim()
+    if (trimmed.isBlank()) return
+    val intent =
+      Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        if (!title.isNullOrBlank()) putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, trimmed)
+      }
+    val chooser =
+      Intent.createChooser(intent, "Share link").apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+    runCatching { app.startActivity(chooser) }
   }
 
   fun playDetectedMedia(item: DetectedMediaItem) {
@@ -515,6 +743,17 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         else -> "video/*"
       }
     launchExternalPlayerIntent(contentUri, mime, download.fileName, grantReadPermission = true)
+  }
+
+  fun openDownloadedFile(download: DownloadItemEntity) {
+    val file = File(download.localPath)
+    if (!file.exists()) {
+      showMessage("Downloaded file is no longer available")
+      return
+    }
+    if (!mediaDownloader.openDownloadedFile(download)) {
+      showMessage("No installed app found to open ${download.fileName}")
+    }
   }
 
   fun openDirectUrlInExternalPlayer(rawUrl: String) {
@@ -877,12 +1116,21 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fileName: String? = null,
     mimeType: String = "application/octet-stream",
     referer: String? = activeTab.value.url.takeIf { it.startsWith("http") },
+    contentDisposition: String? = null,
   ) {
+    val trimmed = url.trim()
+    val isHttp = trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)
+    val isDataUrl = trimmed.startsWith("data:", true)
+    if (!isHttp && !isDataUrl) {
+      showMessage("Unsupported download link")
+      return
+    }
     mediaDownloader.enqueueDownload(
-      url = url,
+      url = trimmed,
       suggestedFileName = fileName,
       mimeType = mimeType,
       referer = referer,
+      contentDisposition = contentDisposition,
     )
     showMessage("Downloading — will auto-save to Downloads/VoltBrowser")
   }
@@ -894,6 +1142,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
   fun retryDownload(item: DownloadItemEntity) {
     viewModelScope.launch {
+      if (item.url.startsWith("data:", ignoreCase = true) && MediaDownloader.parseDataUrl(item.url) == null) {
+        showMessage("Blob/data download expired — please trigger it from the webpage again")
+        return@launch
+      }
       repository.deleteDownload(item.id)
       downloadMedia(
         url = item.url,
@@ -982,8 +1234,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     app.startActivity(chooser)
   }
 
+  fun setAdBlockerType(type: AdBlockerType) {
+    viewModelScope.launch {
+      repository.preferences.setAdBlockerType(type)
+      if (!activeTab.value.isSpeedDial) {
+        webViewPool.findWebView(activeTab.value.id)?.reload()
+      }
+      showMessage("Blocker set to ${type.displayName}")
+    }
+  }
+
   fun toggleTurboShield(enabled: Boolean) {
-    viewModelScope.launch { repository.preferences.setTurboShield(enabled) }
+    setAdBlockerType(if (enabled) AdBlockerType.ADGUARD else AdBlockerType.OFF)
   }
 
   fun toggleLiteMode(enabled: Boolean) {
@@ -1005,12 +1267,44 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch { repository.preferences.setSearchEngine(engine) }
   }
 
+  fun setThemeMode(mode: AppThemeMode) {
+    viewModelScope.launch { repository.preferences.setThemeMode(mode) }
+  }
+
+  fun toggleAutoWireGuardOnLaunch(enabled: Boolean) {
+    viewModelScope.launch { repository.preferences.setAutoWireGuardOnLaunch(enabled) }
+  }
+
   fun toggleAutoProxyOnLaunch(enabled: Boolean) {
     viewModelScope.launch { repository.preferences.setAutoProxyOnLaunch(enabled) }
+    if (enabled && _vpnRelayState.value.activeRelay == null && !_vpnRelayState.value.isWireGuardActive) {
+      autoConnectFastestRelay(fastStartup = true)
+    }
   }
 
   fun toggleAutoProxyFailover(enabled: Boolean) {
     viewModelScope.launch { repository.preferences.setAutoProxyFailover(enabled) }
+  }
+
+  fun toggleAutoDnsVpnOnLaunch(enabled: Boolean) {
+    viewModelScope.launch { repository.preferences.setAutoDnsVpnOnLaunch(enabled) }
+  }
+
+  fun setProxyProtocolFilter(filter: com.example.vpn.ProxyProtocolFilter) {
+    _vpnRelayState.update { it.copy(selectedProtocolFilter = filter) }
+  }
+
+  fun setProxyCountryFilter(countryCode: String) {
+    _vpnRelayState.update { it.copy(selectedCountryFilter = countryCode) }
+  }
+
+  fun connectCustomProxy(rawAddress: String, protocol: String) {
+    val parsed = PublicRelayManager.parseSingleProxy(rawAddress, protocol)
+    if (parsed == null) {
+      showMessage("Enter ip:port or user:pass@ip:port (public IPv4)")
+      return
+    }
+    connectRelay(parsed, reloadActiveTab = false)
   }
 
   fun showMessage(msg: String) {
@@ -1026,6 +1320,222 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     refreshExitIp()
   }
 
+  fun connectCloudflareWarp(silentStartup: Boolean = false) {
+    if (_vpnRelayState.value.isWireGuardConnecting) return
+    viewModelScope.launch {
+      if (VoltVpnService.runtimeStats.value.isRunning) {
+        stopDnsVpn(silent = true)
+      }
+      if (_vpnRelayState.value.activeRelay != null) {
+        relayManager.clearWebViewProxy {}
+        speedEngine.setActiveProxy(null)
+      }
+      _vpnRelayState.update {
+        it.copy(
+          isWireGuardConnecting = true,
+          activeRelay = null,
+          statusMessage = "Connecting Cloudflare WARP (WireGuard)...",
+        )
+      }
+      val existingConf = settings.value.savedWarpConf
+      val confResult =
+        if (existingConf.isNotBlank()) {
+          Result.success(existingConf)
+        } else {
+          wireGuardManager.registerCloudflareWarpConfig().also { result ->
+            result.getOrNull()?.let { freshConf ->
+              repository.preferences.saveWarpConfig(freshConf)
+            }
+          }
+        }
+
+      val confText = confResult.getOrElse { err ->
+        _vpnRelayState.update {
+          it.copy(
+            isWireGuardConnecting = false,
+            statusMessage = "WARP setup error: ${err.message ?: "Network unreachable"}",
+          )
+        }
+        if (!silentStartup) showMessage("Could not register Cloudflare WARP right now")
+        return@launch
+      }
+
+      if (existingConf.isNotBlank()) {
+        repository.preferences.setPreferredWireGuardMode(WireGuardMode.WARP_FREE)
+      }
+
+      var connectResult = wireGuardManager.connect(confText, "Cloudflare WARP")
+      if (connectResult.isFailure && existingConf.isNotBlank()) {
+        // Refresh WARP registration once if cached key expired
+        val fresh = wireGuardManager.registerCloudflareWarpConfig().getOrNull()
+        if (fresh != null) {
+          repository.preferences.saveWarpConfig(fresh)
+          connectResult = wireGuardManager.connect(fresh, "Cloudflare WARP")
+        }
+      }
+
+      connectResult.fold(
+        onSuccess = { info ->
+          _vpnRelayState.update {
+            it.copy(
+              isWireGuardActive = true,
+              isWireGuardConnecting = false,
+              wireGuardMode = WireGuardMode.WARP_FREE,
+              wireGuardProfileName = info.profileName,
+              wireGuardEndpoint = info.endpoint,
+              hasSavedWarpConfig = true,
+              statusMessage = "Cloudflare WARP WireGuard active (${info.endpoint})",
+            )
+          }
+          startWireGuardStatsPolling()
+          delay(350L)
+          refreshExitIp()
+          if (!silentStartup) showMessage("Cloudflare WARP WireGuard connected")
+        },
+        onFailure = { err ->
+          _vpnRelayState.update {
+            it.copy(
+              isWireGuardActive = false,
+              isWireGuardConnecting = false,
+              statusMessage = "WireGuard failed: ${err.message ?: "VPN permission needed"}",
+            )
+          }
+          if (!silentStartup) showMessage("Failed to start WireGuard tunnel")
+        },
+      )
+    }
+  }
+
+  fun connectSavedCustomWireGuard() {
+    val saved = settings.value.savedCustomWgConf
+    if (saved.isBlank()) {
+      showMessage("Import or paste a WireGuard .conf first")
+      return
+    }
+    val name = settings.value.savedCustomWgName.ifBlank { "Custom WireGuard" }
+    connectCustomWireGuardConf(saved, name, persistConfig = false)
+  }
+
+  fun connectCustomWireGuardConf(
+    rawConf: String,
+    profileName: String = "Custom WireGuard",
+    persistConfig: Boolean = true,
+  ) {
+    if (_vpnRelayState.value.isWireGuardConnecting) return
+    val validation = wireGuardManager.parseConfig(rawConf)
+    if (validation.isFailure) {
+      val msg = validation.exceptionOrNull()?.message ?: "Invalid WireGuard .conf format"
+      _vpnRelayState.update { it.copy(statusMessage = msg) }
+      showMessage(msg)
+      return
+    }
+
+    viewModelScope.launch {
+      if (VoltVpnService.runtimeStats.value.isRunning) {
+        stopDnsVpn(silent = true)
+      }
+      if (_vpnRelayState.value.activeRelay != null) {
+        relayManager.clearWebViewProxy {}
+        speedEngine.setActiveProxy(null)
+      }
+      _vpnRelayState.update {
+        it.copy(
+          isWireGuardConnecting = true,
+          activeRelay = null,
+          statusMessage = "Starting $profileName...",
+        )
+      }
+      if (persistConfig) {
+        repository.preferences.saveCustomWireGuardConfig(rawConf.trim(), profileName.trim())
+      } else {
+        repository.preferences.setPreferredWireGuardMode(WireGuardMode.CUSTOM_CONF)
+      }
+
+      wireGuardManager.connect(rawConf, profileName).fold(
+        onSuccess = { info ->
+          _vpnRelayState.update {
+            it.copy(
+              isWireGuardActive = true,
+              isWireGuardConnecting = false,
+              wireGuardMode = WireGuardMode.CUSTOM_CONF,
+              wireGuardProfileName = info.profileName,
+              wireGuardEndpoint = info.endpoint,
+              hasSavedCustomWgConf = true,
+              statusMessage = "$profileName active (${info.endpoint})",
+            )
+          }
+          startWireGuardStatsPolling()
+          delay(350L)
+          refreshExitIp()
+          showMessage("$profileName connected")
+        },
+        onFailure = { err ->
+          _vpnRelayState.update {
+            it.copy(
+              isWireGuardActive = false,
+              isWireGuardConnecting = false,
+              statusMessage = "WireGuard error: ${err.message ?: "Unable to connect"}",
+            )
+          }
+          showMessage("WireGuard error: ${err.message ?: "Unable to connect"}")
+        },
+      )
+    }
+  }
+
+  fun disconnectWireGuard(silent: Boolean = false) {
+    stopWireGuardStatsPolling()
+    viewModelScope.launch {
+      wireGuardManager.disconnect()
+      _vpnRelayState.update {
+        it.copy(
+          isWireGuardActive = false,
+          isWireGuardConnecting = false,
+          wireGuardMode = WireGuardMode.NONE,
+          wireGuardProfileName = "",
+          wireGuardEndpoint = "",
+          wireGuardRxBytes = 0L,
+          wireGuardTxBytes = 0L,
+          statusMessage = if (silent) it.statusMessage else "WireGuard VPN disconnected.",
+        )
+      }
+      if (!silent) {
+        refreshExitIp()
+        showMessage("WireGuard VPN disconnected")
+      }
+    }
+  }
+
+  private fun startWireGuardStatsPolling() {
+    wireGuardStatsJob?.cancel()
+    wireGuardStatsJob =
+      viewModelScope.launch {
+        while (true) {
+          val up = wireGuardManager.isTunnelActiveNow()
+          if (!up) {
+            _vpnRelayState.update {
+              if (it.isWireGuardActive) it.copy(isWireGuardActive = false, wireGuardMode = WireGuardMode.NONE)
+              else it
+            }
+            break
+          }
+          val (rx, tx) = wireGuardManager.readStatistics()
+          _vpnRelayState.update {
+            it.copy(
+              wireGuardRxBytes = rx,
+              wireGuardTxBytes = tx,
+            )
+          }
+          delay(1500L)
+        }
+      }
+  }
+
+  private fun stopWireGuardStatsPolling() {
+    wireGuardStatsJob?.cancel()
+    wireGuardStatsJob = null
+  }
+
   fun toggleFreeAutoProxy() {
     if (_vpnRelayState.value.activeRelay != null) {
       disconnectRelay()
@@ -1037,27 +1547,44 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun prepareVpnConsentIntent(): Intent? = VpnService.prepare(app)
 
   fun startDnsVpnService() {
-    val provider = _vpnRelayState.value.activeDohProvider
-    val intent =
-      Intent(app, VoltVpnService::class.java).apply {
-        action = VoltVpnService.ACTION_START
-        putExtra(VoltVpnService.EXTRA_DOH_PROVIDER, provider.name)
+    viewModelScope.launch {
+      if (_vpnRelayState.value.isWireGuardActive) {
+        stopWireGuardStatsPolling()
+        wireGuardManager.disconnect()
+        _vpnRelayState.update {
+          it.copy(
+            isWireGuardActive = false,
+            wireGuardMode = WireGuardMode.NONE,
+            wireGuardProfileName = "",
+            wireGuardEndpoint = "",
+            wireGuardRxBytes = 0L,
+            wireGuardTxBytes = 0L,
+          )
+        }
       }
-    ContextCompat.startForegroundService(app, intent)
-    showMessage("Encrypted DNS VPN active (${provider.displayName})")
+      val provider = _vpnRelayState.value.activeDohProvider
+      val intent =
+        Intent(app, VoltVpnService::class.java).apply {
+          action = VoltVpnService.ACTION_START
+          putExtra(VoltVpnService.EXTRA_DOH_PROVIDER, provider.name)
+        }
+      ContextCompat.startForegroundService(app, intent)
+      showMessage("Encrypted DNS VPN active (${provider.displayName})")
+    }
   }
 
-  fun stopDnsVpn() {
+  fun stopDnsVpn(silent: Boolean = false) {
     val intent =
       Intent(app, VoltVpnService::class.java).apply {
         action = VoltVpnService.ACTION_STOP
       }
     app.startService(intent)
-    showMessage("Encrypted DNS VPN disconnected")
+    if (!silent) showMessage("Encrypted DNS VPN disconnected")
   }
 
   fun selectDohProvider(provider: DohProvider) {
     _vpnRelayState.update { it.copy(activeDohProvider = provider) }
+    viewModelScope.launch { repository.preferences.setPreferredDohProvider(provider) }
     if (VoltVpnService.runtimeStats.value.isRunning) {
       startDnsVpnService()
     }
@@ -1078,33 +1605,44 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
   fun refreshPublicRelays() {
     if (_vpnRelayState.value.isFetchingRelays) return
-    _vpnRelayState.update { it.copy(isFetchingRelays = true, statusMessage = "Scanning free HTTP & SOCKS5 proxy pools...") }
+    _vpnRelayState.update {
+      it.copy(
+        isFetchingRelays = true,
+        statusMessage = "Scanning 9 global feeds & benchmarking HTTPS/SOCKS5 proxies...",
+      )
+    }
     viewModelScope.launch {
-      val relays = relayManager.fetchAndProbePublicRelays(excludeIds = skippedRelayIds)
+      val summary = relayManager.fetchAndProbePublicRelays(excludeIds = skippedRelayIds)
+      val relays = summary.relays
       val reachableCount = relays.count { it.isReachable == true }
       _vpnRelayState.update {
         it.copy(
           availableRelays = relays,
+          totalCandidatesScanned = summary.totalCandidatesScanned,
           isFetchingRelays = false,
           statusMessage =
             when {
               relays.isEmpty() -> "Could not reach public proxy feeds right now."
               reachableCount == 0 ->
-                "Probed ${relays.size} proxies; none responded cleanly. Tap Refresh to try a fresh batch."
-              else -> "$reachableCount live HTTPS/SOCKS5 proxies verified."
+                "Scanned ${summary.totalCandidatesScanned} proxies; none responded cleanly. Tap Refresh to try a fresh batch."
+              else ->
+                "$reachableCount live relays verified from ${summary.totalCandidatesScanned} scanned."
             },
         )
       }
     }
   }
 
-  fun autoConnectFastestRelay(reloadActiveTab: Boolean = false) {
+  fun autoConnectFastestRelay(reloadActiveTab: Boolean = false, fastStartup: Boolean = false) {
     if (_vpnRelayState.value.isFetchingRelays || _vpnRelayState.value.isConnectingRelay) return
     viewModelScope.launch {
+      val stateSnapshot = _vpnRelayState.value
       val existingCandidates =
-        _vpnRelayState.value.availableRelays.filter {
-          it.isReachable == true && it.id !in skippedRelayIds
-        }
+        filterRelays(
+          relays = stateSnapshot.availableRelays,
+          protocolFilter = stateSnapshot.selectedProtocolFilter,
+          countryFilter = stateSnapshot.selectedCountryFilter,
+        ).filter { it.isReachable == true && it.id !in skippedRelayIds }
 
       val candidates =
         if (existingCandidates.isNotEmpty()) {
@@ -1113,27 +1651,74 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
           _vpnRelayState.update {
             it.copy(
               isFetchingRelays = true,
-              statusMessage = "Auto-discovering & benchmarking free proxies...",
+              statusMessage =
+                if (fastStartup) "Auto-loading fastest free proxy on startup..."
+                else "Scanning global feeds & benchmarking fastest free proxies...",
             )
           }
-          val fetched = relayManager.fetchAndProbePublicRelays(excludeIds = skippedRelayIds)
-          _vpnRelayState.update { it.copy(availableRelays = fetched, isFetchingRelays = false) }
-          fetched.filter { it.isReachable == true && it.id !in skippedRelayIds }
+          val summary =
+            if (fastStartup) relayManager.findFastestStartupBatch(excludeIds = skippedRelayIds)
+            else relayManager.fetchAndProbePublicRelays(excludeIds = skippedRelayIds)
+          _vpnRelayState.update {
+            it.copy(
+              availableRelays = summary.relays,
+              totalCandidatesScanned = summary.totalCandidatesScanned,
+              isFetchingRelays = false,
+            )
+          }
+          val filtered =
+            filterRelays(
+              relays = summary.relays,
+              protocolFilter = _vpnRelayState.value.selectedProtocolFilter,
+              countryFilter = _vpnRelayState.value.selectedCountryFilter,
+            ).filter { it.isReachable == true && it.id !in skippedRelayIds }
+          filtered.ifEmpty {
+            summary.relays.filter { it.isReachable == true && it.id !in skippedRelayIds }
+          }
         }
 
-      val fastest = candidates.firstOrNull()
-      if (fastest != null) {
-        connectRelay(fastest, reloadActiveTab = reloadActiveTab)
+      val ordered = candidates.sortedWith(PublicRelayManager.relayRankingComparator)
+      val selected =
+        if (fastStartup) {
+          val fastDeOrIn = ordered.firstOrNull { it.isPreferredRegion && (it.latencyMs ?: Long.MAX_VALUE) <= 1200L }
+          fastDeOrIn ?: ordered.firstOrNull { (it.latencyMs ?: Long.MAX_VALUE) <= 1200L }
+        } else {
+          ordered.firstOrNull()
+        }
+
+      if (selected != null) {
+        connectRelay(selected, reloadActiveTab = reloadActiveTab)
       } else {
         skippedRelayIds.clear()
         _vpnRelayState.update {
           it.copy(
-            statusMessage = "No responsive free proxies found in this batch. Tap Auto-Connect to retry.",
+            statusMessage =
+              if (fastStartup && ordered.isNotEmpty())
+                "Public proxies too slow right now (>1.2s) — staying direct for max speed."
+              else
+                "No responsive free proxies found in this batch. Tap Auto-Connect to retry.",
           )
         }
       }
     }
   }
+
+  private fun filterRelays(
+    relays: List<PublicRelayNode>,
+    protocolFilter: com.example.vpn.ProxyProtocolFilter,
+    countryFilter: String,
+  ): List<PublicRelayNode> =
+    relays.filter { relay ->
+      val protoOk =
+        when (protocolFilter) {
+          com.example.vpn.ProxyProtocolFilter.ALL -> true
+          com.example.vpn.ProxyProtocolFilter.HTTP -> relay.protocol.equals("HTTP", ignoreCase = true)
+          com.example.vpn.ProxyProtocolFilter.SOCKS5 -> relay.protocol.equals("SOCKS5", ignoreCase = true)
+        }
+      val countryOk =
+        countryFilter == "ALL" || relay.countryCode.equals(countryFilter, ignoreCase = true)
+      protoOk && countryOk
+    }
 
   fun rotateToNextProxy(reloadActiveTab: Boolean = false) {
     _vpnRelayState.value.activeRelay?.let { skippedRelayIds.add(it.id) }
@@ -1158,24 +1743,31 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
           }
           return@launch
         }
-        speedEngine.setActiveProxy(PublicRelayManager.toJavaNetProxy(relay))
-        val ipInfo = relayManager.fetchCurrentExitIp(relay)
+        speedEngine.setActiveProxy(
+          proxy = PublicRelayManager.toJavaNetProxy(relay),
+          username = relay.username,
+          password = relay.password,
+        )
+        val ipInfo =
+          if (relay.resolvedExitIp != null) null
+          else relayManager.fetchCurrentExitIp(relay)
+        val resolvedIp = relay.resolvedExitIp ?: ipInfo?.ip ?: relay.ip
         val resolvedCountry = ipInfo?.country?.ifBlank { relay.country } ?: relay.country
-        val updatedRelay = relay.copy(country = resolvedCountry)
+        val updatedRelay = relay.copy(country = resolvedCountry, resolvedExitIp = resolvedIp)
         _vpnRelayState.update {
           it.copy(
             activeRelay = updatedRelay,
             isConnectingRelay = false,
-            currentExitIp = ipInfo?.ip ?: relay.ip,
+            currentExitIp = resolvedIp,
             currentExitCountry = resolvedCountry,
             statusMessage =
-              "Free Auto Proxy active: $resolvedCountry (${relay.protocol} • ${relay.latencyMs ?: 0}ms)",
+              "Optional Proxy active: $resolvedCountry (${relay.protocol} • ${relay.latencyMs ?: 0}ms)",
           )
         }
         if (reloadActiveTab && !activeTab.value.isSpeedDial) {
           webViewPool.findWebView(activeTab.value.id)?.reload()
         }
-        showMessage("Free Auto Proxy connected ($resolvedCountry)")
+        showMessage("Proxy connected ($resolvedCountry)")
       }
     }
   }
@@ -1188,11 +1780,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
           it.copy(
             activeRelay = null,
             isConnectingRelay = false,
-            statusMessage = "Free Auto Proxy disconnected (direct connection).",
+            statusMessage = "Optional Proxy disconnected (direct connection).",
           )
         }
         refreshExitIp()
-        showMessage("Auto Proxy disconnected")
+        showMessage("Proxy disconnected")
       }
     }
   }
@@ -1200,14 +1792,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun exitAndEraseAllData(onComplete: () -> Unit) {
     _activeSheet.value = BrowserSheet.NONE
     _findInPageVisible.value = false
+    _isBrowserFullscreen.value = false
     exitHtmlFullscreen()
 
-    // Stop active downloads, media playback, VPN tunnel, and proxy overrides immediately
+    // Stop active downloads, media playback, WireGuard / DoH VPN tunnels, and proxy overrides immediately
     mediaDownloader.cancelAllDownloads()
     mediaManager.closePlayer()
     mediaManager.release()
     runCatching { app.stopService(Intent(app, VoltMediaService::class.java)) }
 
+    stopWireGuardStatsPolling()
     if (VoltVpnService.runtimeStats.value.isRunning) {
       runCatching {
         app.startService(Intent(app, VoltVpnService::class.java).apply { action = VoltVpnService.ACTION_STOP })
@@ -1232,11 +1826,139 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     viewModelScope.launch {
       withContext(NonCancellable + Dispatchers.IO) {
+        runCatching { wireGuardManager.disconnect() }
         runCatching { repository.wipeAllPersistedData() }
         DeviceTraceCleaner.wipeFileSystemTraces(app)
         speedEngine.clearNetworkPools()
       }
       onComplete()
+    }
+  }
+
+  private fun readAppUidTotalBytes(): Long? {
+    val uid = android.os.Process.myUid()
+    val rx = android.net.TrafficStats.getUidRxBytes(uid)
+    val tx = android.net.TrafficStats.getUidTxBytes(uid)
+    val unsupported = android.net.TrafficStats.UNSUPPORTED.toLong()
+    if (rx == unsupported || tx == unsupported || rx < 0L || tx < 0L) return null
+    return rx + tx
+  }
+
+  fun refreshSocialAppStates() {
+    val pm = app.packageManager
+    val igInstalled = isPackageInstalled(pm, "com.instagram.android")
+    val fbInstalled = isPackageInstalled(pm, "com.facebook.katana")
+    _socialApps.value =
+      listOf(
+        SocialAppShortcut(
+          id = "instagram",
+          name = "Instagram",
+          packageName = "com.instagram.android",
+          webUrl = "https://www.instagram.com/",
+          loginUrl = "https://www.instagram.com/accounts/login/",
+          isInstalled = igInstalled,
+        ),
+        SocialAppShortcut(
+          id = "facebook",
+          name = "Facebook",
+          packageName = "com.facebook.katana",
+          webUrl = "https://www.facebook.com/",
+          loginUrl = "https://www.facebook.com/login/",
+          isInstalled = fbInstalled,
+        ),
+      )
+    _hasSystemAutofill.value =
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        runCatching {
+          val manager = app.getSystemService(android.view.autofill.AutofillManager::class.java)
+          manager != null && manager.isEnabled && manager.hasEnabledAutofillServices()
+        }.getOrDefault(false)
+      } else {
+        false
+      }
+  }
+
+  private fun isPackageInstalled(pm: android.content.pm.PackageManager, packageName: String): Boolean {
+    return runCatching {
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        pm.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+      } else {
+        @Suppress("DEPRECATION")
+        pm.getPackageInfo(packageName, 0)
+      }
+      true
+    }.getOrDefault(false)
+  }
+
+  fun toggleSocialSidebar() {
+    val next = !_socialSidebarOpen.value
+    if (next) refreshSocialAppStates()
+    _socialSidebarOpen.value = next
+  }
+
+  fun closeSocialSidebar() {
+    _socialSidebarOpen.value = false
+  }
+
+  fun openSocialInBrowser(shortcut: SocialAppShortcut) {
+    _socialSidebarOpen.value = false
+    navigate(shortcut.webUrl)
+  }
+
+  fun launchInstalledSocialApp(shortcut: SocialAppShortcut) {
+    val launchIntent = app.packageManager.getLaunchIntentForPackage(shortcut.packageName)
+    if (launchIntent != null) {
+      launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      runCatching { app.startActivity(launchIntent) }
+        .onFailure { navigate(shortcut.webUrl) }
+      _socialSidebarOpen.value = false
+    } else {
+      showMessage("${shortcut.name} app not installed — opening web version")
+      openSocialInBrowser(shortcut)
+    }
+  }
+
+  fun triggerSocialAutofill() {
+    val tab = activeTab.value
+    if (tab.isSpeedDial) {
+      showMessage("Open Instagram or Facebook first, then tap Autofill Login")
+      return
+    }
+    refreshSocialAppStates()
+    val requested = webViewPool.requestAutofill(tab.id)
+    if (requested) {
+      _socialSidebarOpen.value = false
+      showMessage("System Autofill triggered — tap email or password box to fill saved login")
+    } else if (!_hasSystemAutofill.value) {
+      openDeviceAutofillSettings()
+    } else {
+      showMessage("Tap the username or password box on the page to trigger device Autofill")
+    }
+  }
+
+  fun openDeviceAutofillSettings() {
+    val opened =
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        runCatching {
+          val intent =
+            Intent(android.provider.Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
+              data = Uri.parse("package:${app.packageName}")
+              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+          app.startActivity(intent)
+          true
+        }.getOrDefault(false)
+      } else {
+        false
+      }
+    if (!opened) {
+      runCatching {
+        app.startActivity(
+          Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+      }.onFailure {
+        showMessage("Open Android Settings > Passwords & accounts to enable Autofill")
+      }
     }
   }
 

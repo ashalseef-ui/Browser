@@ -9,9 +9,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,13 +32,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistPlay
@@ -73,9 +80,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -90,7 +99,7 @@ import com.example.ui.components.formatBytes
 import com.example.ui.components.formatDurationMs
 import com.example.ui.theme.LocalVoltColors
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MediaHubSheet(
   detectedMedia: List<DetectedMediaItem>,
@@ -109,17 +118,20 @@ fun MediaHubSheet(
   onRetryDownload: (DownloadItemEntity) -> Unit,
   onPlayDownload: (DownloadItemEntity) -> Unit,
   onOpenExternalDownload: (DownloadItemEntity) -> Unit,
+  onOpenDownload: (DownloadItemEntity) -> Unit,
   onExportDownload: (DownloadItemEntity) -> Unit,
   onSaveDownloadAs: (DownloadItemEntity, Uri) -> Unit,
   onShareDownload: (DownloadItemEntity) -> Unit,
   onDeleteDownload: (DownloadItemEntity) -> Unit,
   onPlayLocalUri: (Uri, String, Boolean) -> Unit,
+  onLongPressDetectedMedia: (DetectedMediaItem) -> Unit = {},
   onCopyUrlToast: () -> Unit,
   onDismiss: () -> Unit,
 ) {
   val voltColors = LocalVoltColors.current
   val context = LocalContext.current
   val clipboard = LocalClipboardManager.current
+  val haptics = LocalHapticFeedback.current
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var selectedTab by remember { mutableIntStateOf(0) }
   var directUrlInput by remember { mutableStateOf("") }
@@ -376,6 +388,16 @@ fun MediaHubSheet(
                   shape = RoundedCornerShape(16.dp),
                   color = voltColors.cardSurface,
                   border = androidx.compose.foundation.BorderStroke(1.dp, voltColors.cardBorder),
+                  modifier =
+                    Modifier.fillMaxWidth()
+                      .clip(RoundedCornerShape(16.dp))
+                      .combinedClickable(
+                        onClick = { if (isPlayable) onPlayDetected(item) },
+                        onLongClick = {
+                          haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                          onLongPressDetectedMedia(item)
+                        },
+                      ),
                 ) {
                   Column(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
@@ -582,20 +604,14 @@ fun MediaHubSheet(
             if (downloads.isEmpty()) {
               item {
                 EmptyMediaState(
-                  title = "No video or media downloads yet",
+                  title = "No downloads yet",
                   subtitle =
-                    "Download sniffed MP4/HLS videos or resolved playlist tracks. Files auto-save to Downloads/VoltBrowser.",
+                    "Downloads support PDFs, ZIPs, APKs, documents, images, audio, and videos. Files auto-save to Downloads/VoltBrowser.",
                 )
               }
             } else {
               items(downloads, key = { it.id }) { dl ->
-                val isMedia =
-                  dl.mimeType.startsWith("video/") ||
-                    dl.mimeType.startsWith("audio/") ||
-                    dl.fileName.endsWith(".mp4", true) ||
-                    dl.fileName.endsWith(".ts", true) ||
-                    dl.fileName.endsWith(".mp3", true) ||
-                    dl.fileName.endsWith(".webm", true)
+                val isMedia = isPlayableMediaDownload(dl.fileName, dl.mimeType)
                 val status =
                   runCatching { DownloadStatus.valueOf(dl.status) }
                     .getOrDefault(DownloadStatus.COMPLETED)
@@ -611,8 +627,22 @@ fun MediaHubSheet(
                   ) {
                     Row(
                       verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(6.dp),
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                      Box(
+                        modifier =
+                          Modifier.size(34.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(voltColors.cyanAccent.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center,
+                      ) {
+                        Icon(
+                          imageVector = iconForDownloadFile(dl.fileName, dl.mimeType),
+                          contentDescription = null,
+                          tint = voltColors.cyanAccent,
+                          modifier = Modifier.size(18.dp),
+                        )
+                      }
                       Column(modifier = Modifier.weight(1f)) {
                         Text(
                           text = dl.fileName,
@@ -705,6 +735,21 @@ fun MediaHubSheet(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("External", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                           }
+                        } else {
+                          OutlinedButton(
+                            onClick = { onOpenDownload(dl) },
+                            modifier = Modifier.weight(1f).testTag("download_open_button"),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                          ) {
+                            Icon(
+                              imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                              contentDescription = null,
+                              modifier = Modifier.size(15.dp),
+                              tint = voltColors.amberAccent,
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Open", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                          }
                         }
                         OutlinedButton(
                           onClick = {
@@ -782,7 +827,7 @@ fun MediaHubSheet(
           ) {
             item {
               Text(
-                text = "Direct Video / Stream URL",
+                text = "Direct File / Stream URL",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
               )
@@ -790,7 +835,7 @@ fun MediaHubSheet(
               OutlinedTextField(
                 value = directUrlInput,
                 onValueChange = { directUrlInput = it },
-                label = { Text("Paste .mp4, .m3u8, .mpd, or .mp3 URL") },
+                label = { Text("Paste any file (.pdf, .zip, .apk) or media URL") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("direct_media_url_input"),
               )
@@ -819,13 +864,15 @@ fun MediaHubSheet(
                 OutlinedButton(
                   onClick = {
                     val trimmed = directUrlInput.trim()
-                    if (trimmed.startsWith("http")) {
+                    if (trimmed.startsWith("http") || trimmed.startsWith("data:", ignoreCase = true)) {
                       onDownloadDirectUrl(trimmed)
                       selectedTab = 1
                     }
                   },
-                  enabled = directUrlInput.trim().startsWith("http"),
-                  modifier = Modifier.weight(1f).height(44.dp),
+                  enabled =
+                    directUrlInput.trim().startsWith("http") ||
+                      directUrlInput.trim().startsWith("data:", ignoreCase = true),
+                  modifier = Modifier.weight(1f).height(44.dp).testTag("direct_url_download_button"),
                 ) {
                   Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                   Spacer(modifier = Modifier.width(6.dp))
@@ -1026,6 +1073,33 @@ private fun EmptyMediaState(title: String, subtitle: String) {
       style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+  }
+}
+
+private fun isPlayableMediaDownload(fileName: String, mimeType: String): Boolean {
+  val lowerMime = mimeType.lowercase()
+  if (lowerMime.startsWith("video/") || lowerMime.startsWith("audio/")) return true
+  val ext = fileName.substringAfterLast('.', "").lowercase()
+  return ext in setOf("mp4", "ts", "webm", "mkv", "mov", "avi", "m4v", "mp3", "m4a", "aac", "ogg", "opus", "flac", "wav")
+}
+
+private fun iconForDownloadFile(fileName: String, mimeType: String): androidx.compose.ui.graphics.vector.ImageVector {
+  val lowerMime = mimeType.lowercase()
+  val ext = fileName.substringAfterLast('.', "").lowercase()
+  return when {
+    lowerMime.startsWith("video/") || ext in setOf("mp4", "ts", "webm", "mkv", "mov", "avi", "m4v") ->
+      Icons.Default.VideoFile
+    lowerMime.startsWith("audio/") || ext in setOf("mp3", "m4a", "aac", "ogg", "opus", "flac", "wav") ->
+      Icons.Default.AudioFile
+    lowerMime.startsWith("image/") || ext in setOf("png", "jpg", "jpeg", "webp", "gif", "svg", "avif") ->
+      Icons.Default.Image
+    ext == "apk" || lowerMime == "application/vnd.android.package-archive" ->
+      Icons.Default.Android
+    ext in setOf("zip", "7z", "rar", "tar", "gz") ->
+      Icons.Default.FolderZip
+    ext in setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "json", "xml", "epub", "conf") ->
+      Icons.Default.Description
+    else -> Icons.Default.InsertDriveFile
   }
 }
 

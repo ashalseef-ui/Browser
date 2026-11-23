@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 
 object MediaSniffer {
 
@@ -417,6 +418,63 @@ object MediaSniffer {
           obs.observe(document.body, { childList: true, subtree: true });
         }
       }
+
+      if (!window.__voltContextTouchHooked) {
+        window.__voltContextTouchHooked = true;
+        function inspectTouchContext(target, clientX, clientY) {
+          try {
+            var linkUrl = '', linkText = '', imageUrl = '', mediaUrl = '', mediaTitle = '';
+            var els = [];
+            if (typeof clientX === 'number' && typeof clientY === 'number' && document.elementsFromPoint) {
+              els = Array.prototype.slice.call(document.elementsFromPoint(clientX, clientY) || []);
+            }
+            if (target && els.indexOf(target) === -1) els.unshift(target);
+            for (var i = 0; i < els.length; i++) {
+              var el = els[i];
+              if (!el || !el.tagName) continue;
+              var tag = el.tagName.toUpperCase();
+              if (!linkUrl) {
+                var a = tag === 'A' ? el : (el.closest ? el.closest('a[href]') : null);
+                if (a && a.href) {
+                  linkUrl = a.href;
+                  linkText = (a.innerText || a.getAttribute('aria-label') || a.title || '').trim();
+                }
+              }
+              if (!imageUrl && tag === 'IMG' && (el.currentSrc || el.src)) {
+                imageUrl = el.currentSrc || el.src;
+              }
+              if (!mediaUrl && (tag === 'VIDEO' || tag === 'AUDIO')) {
+                var src = el.currentSrc || el.src;
+                if (!src && el.querySelector) {
+                  var s = el.querySelector('source[src]');
+                  if (s) src = s.src || s.getAttribute('src') || '';
+                }
+                if (src) {
+                  mediaUrl = src;
+                  mediaTitle = el.getAttribute('title') || el.getAttribute('aria-label') || document.title || '';
+                }
+                if (!imageUrl && el.poster) imageUrl = el.poster;
+              }
+            }
+            if (window.VoltMediaBridge && window.VoltMediaBridge.onTouchTargetDetected) {
+              window.VoltMediaBridge.onTouchTargetDetected(JSON.stringify({
+                linkUrl: linkUrl || '',
+                linkText: linkText || '',
+                imageUrl: imageUrl || '',
+                mediaUrl: mediaUrl || '',
+                mediaTitle: mediaTitle || ''
+              }));
+            }
+          } catch (e) {}
+        }
+        document.addEventListener('touchstart', function(e) {
+          var t = e.touches && e.touches[0];
+          inspectTouchContext(e.target, t ? t.clientX : null, t ? t.clientY : null);
+        }, { capture: true, passive: true });
+        document.addEventListener('contextmenu', function(e) {
+          inspectTouchContext(e.target, e.clientX, e.clientY);
+        }, { capture: true, passive: true });
+      }
       window.__voltScanMedia();
       setTimeout(window.__voltScanMedia, 1000);
     })();
@@ -427,7 +485,29 @@ object MediaSniffer {
 class VoltMediaJsBridge(
   private val onDetected: (List<DetectedMediaItem>) -> Unit,
   private val currentPageUrlProvider: () -> String,
+  private val onBlobDownloaded: (dataUrl: String, suggestedName: String, mimeType: String) -> Unit = { _, _, _ -> },
+  private val onTouchTarget: (linkUrl: String?, linkText: String?, imageUrl: String?, mediaUrl: String?, mediaTitle: String?) -> Unit = { _, _, _, _, _ -> },
 ) {
+  @JavascriptInterface
+  fun onTouchTargetDetected(jsonPayload: String) {
+    runCatching {
+      val obj = JSONObject(jsonPayload)
+      val linkUrl = obj.optString("linkUrl").takeIf { it.isNotBlank() }
+      val linkText = obj.optString("linkText").takeIf { it.isNotBlank() }
+      val imageUrl = obj.optString("imageUrl").takeIf { it.isNotBlank() }
+      val mediaUrl = obj.optString("mediaUrl").takeIf { it.isNotBlank() }
+      val mediaTitle = obj.optString("mediaTitle").takeIf { it.isNotBlank() }
+      onTouchTarget(linkUrl, linkText, imageUrl, mediaUrl, mediaTitle)
+    }
+  }
+
+  @JavascriptInterface
+  fun onBlobDownloadData(dataUrl: String, suggestedName: String, mimeType: String) {
+    if (dataUrl.startsWith("data:", ignoreCase = true)) {
+      onBlobDownloaded(dataUrl, suggestedName, mimeType)
+    }
+  }
+
   @JavascriptInterface
   fun onMediaFound(jsonPayload: String) {
     runCatching {

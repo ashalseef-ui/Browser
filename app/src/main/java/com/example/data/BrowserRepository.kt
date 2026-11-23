@@ -18,70 +18,8 @@ class BrowserRepository(
   fun observeIsBookmarked(url: String): Flow<Boolean> = bookmarkDao.observeIsBookmarked(url)
 
   suspend fun initializeCleanSession() {
-    // Strictly enforce zero-history policy by wiping any legacy history rows on launch.
+    // Strictly enforce zero-history & zero-link policy by wiping any legacy history or default tiles on launch.
     historyDao.clearAll()
-    if (bookmarkDao.count() == 0) {
-      bookmarkDao.insertAll(
-        listOf(
-          BookmarkEntity(
-            url = "https://duckduckgo.com",
-            title = "DuckDuckGo",
-            category = "Search",
-            isSpeedDial = true,
-            accentHex = "#FF6D00",
-          ),
-          BookmarkEntity(
-            url = "https://en.m.wikipedia.org",
-            title = "Wikipedia",
-            category = "Reference",
-            isSpeedDial = true,
-            accentHex = "#00E5FF",
-          ),
-          BookmarkEntity(
-            url = "https://github.com/trending",
-            title = "GitHub",
-            category = "Dev",
-            isSpeedDial = true,
-            accentHex = "#B388FF",
-          ),
-          BookmarkEntity(
-            url = "https://archive.org/details/movies",
-            title = "Archive Media",
-            category = "Media",
-            isSpeedDial = true,
-            accentHex = "#FFB300",
-          ),
-          BookmarkEntity(
-            url = "https://commons.wikimedia.org/wiki/Main_Page",
-            title = "Wikimedia",
-            category = "Media",
-            isSpeedDial = true,
-            accentHex = "#00E676",
-          ),
-          BookmarkEntity(
-            url = "https://news.ycombinator.com",
-            title = "Hacker News",
-            category = "Tech",
-            isSpeedDial = true,
-            accentHex = "#FF7043",
-          ),
-          BookmarkEntity(
-            url = "https://developer.android.com",
-            title = "Android Dev",
-            category = "Dev",
-            isSpeedDial = true,
-            accentHex = "#3DDC84",
-          ),
-          BookmarkEntity(
-            url = "https://www.npr.org",
-            title = "NPR Audio",
-            category = "News",
-            isSpeedDial = true,
-            accentHex = "#38BDF8",
-          ),
-        )
-      )
-    }
   }
 
   suspend fun toggleBookmark(url: String, title: String, isCurrentlyBookmarked: Boolean) {
@@ -123,6 +61,15 @@ class BrowserRepository(
     localPath: String,
   ) {
     downloadDao.updateProgress(id, downloaded, total, status.name, localPath)
+  }
+
+  suspend fun updateDownloadMetadata(
+    id: Long,
+    fileName: String,
+    mimeType: String,
+    localPath: String,
+  ) {
+    downloadDao.updateMetadata(id, fileName, mimeType, localPath)
   }
 
   suspend fun deleteDownload(id: Long) = downloadDao.deleteById(id)
