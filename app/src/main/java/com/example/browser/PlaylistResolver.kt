@@ -232,7 +232,7 @@ object PlaylistResolver {
           okHttpClient = okHttpClient,
           url = stats.segmentUrls.first(),
           referer = item.sourcePageUrl,
-          minBytes = 4096L,
+          minBytes = 0L,
         )
       val sampleSize = segProbe.contentSizeBytes
       estimatedBytes =
@@ -242,9 +242,7 @@ object PlaylistResolver {
           sampleSize != null && sampleSize > 0L -> sampleSize * stats.segmentUrls.size
           else -> null
         }
-      val totalSizeOk =
-        estimatedBytes != null && estimatedBytes > MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES
-      streamMeetsThreshold = segProbe.isDownloadable && totalSizeOk
+      streamMeetsThreshold = segProbe.isDownloadable
     }
 
     val updatedItem =

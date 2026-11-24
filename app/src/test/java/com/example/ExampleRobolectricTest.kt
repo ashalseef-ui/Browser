@@ -287,15 +287,15 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `media sniffer verifies only downloadable video responses larger than 1 MB and flags drm hls playlists`() {
+  fun `media sniffer verifies downloadable video responses of any size or null content length and flags drm hls playlists`() {
     assertTrue(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", 15_000_000L))
     assertTrue(MediaSniffer.isDownloadableVideoResponse(206, "application/octet-stream", 1_048_577L))
-    assertFalse(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", 1_048_576L))
-    assertFalse(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", null))
+    assertTrue(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", 1_048_576L))
+    assertTrue(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", null))
     assertFalse(MediaSniffer.isDownloadableVideoResponse(403, "video/mp4", 5_200_000L))
     assertFalse(MediaSniffer.isDownloadableVideoResponse(200, "text/html; charset=utf-8", 5_200_000L))
     assertFalse(MediaSniffer.isDownloadableVideoResponse(200, "audio/mpeg", 4_000_000L))
-    assertFalse(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", 512L))
+    assertTrue(MediaSniffer.isDownloadableVideoResponse(200, "video/mp4", 512L))
 
     val drmPlaylist = """
       #EXTM3U

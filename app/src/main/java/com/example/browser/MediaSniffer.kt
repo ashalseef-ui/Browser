@@ -19,7 +19,7 @@ object MediaSniffer {
   const val DEFAULT_BROWSER_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
-  const val MIN_DOWNLOADABLE_VIDEO_BYTES = 1_048_576L // Strictly > 1 MB (1 MiB)
+  const val MIN_DOWNLOADABLE_VIDEO_BYTES = 0L // No strict minimum size restriction
 
   private val videoExtensions = setOf("mp4", "webm", "mkv", "mov", "m4v", "3gp", "avi", "flv")
   private val audioExtensions = setOf("mp3", "aac", "m4a", "ogg", "opus", "flac", "wav")
@@ -179,15 +179,13 @@ object MediaSniffer {
     ) {
       return false
     }
-    // Enforce strict size check (> minBytes; default > 1 MB for full downloadable videos)
-    if (contentLength == null || contentLength <= minBytes) {
-      return false
-    }
     return mimeLower.isEmpty() ||
       mimeLower.startsWith("video/") ||
       mimeLower == "application/octet-stream" ||
       mimeLower == "binary/octet-stream" ||
-      mimeLower == "application/mp4"
+      mimeLower == "application/mp4" ||
+      mimeLower.contains("stream") ||
+      mimeLower.contains("mpegurl")
   }
 
   /**

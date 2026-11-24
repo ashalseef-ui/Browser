@@ -8,7 +8,7 @@ import java.util.Locale
 
 object TurboShield {
 
-  // Tier 1: Core ad & tracker domains (Standard Shield + AdGuard + Strict)
+  // Comprehensive Core Ad, Tracker & Telemetry Domains
   private val standardDomains: HashSet<String> =
     hashSetOf(
       "doubleclick.net",
@@ -58,9 +58,12 @@ object TurboShield {
       "tr.snapchat.com",
       "ct.pinterest.com",
       "log.pinterest.com",
+      "ads.yahoo.com",
+      "adserver.yahoo.com",
+      "analytics.yahoo.com",
     )
 
-  // Tier 2: AdGuard extended network & telemetry filter domains
+  // AdGuard Extended Network, Telemetry & Analytics Domains
   private val adGuardDomains: HashSet<String> =
     hashSetOf(
       "hotjar.com",
@@ -151,7 +154,7 @@ object TurboShield {
       "addthis.com",
     )
 
-  // Tier 3: Strict Anti-Popup, Aggressive Popunders & Consent / Anti-Adblock Bloat
+  // Strict Anti-Popup, Aggressive Popunder, Anti-Adblock & Cookie Consent Domains
   private val strictDomains: HashSet<String> =
     hashSetOf(
       "propellerads.com",
@@ -179,9 +182,13 @@ object TurboShield {
       "sourcepoint.com",
       "bounceexchange.com",
       "wunderkind.co",
+      "tsyndicate.com",
+      "ero-advertising.com",
+      "adtelligent.com",
+      "clickiocdn.com",
     )
 
-  // Tier 4: Stealth Mode Anti-Fingerprinting & Advanced Tracker Shield
+  // Stealth Mode Anti-Fingerprinting & Advanced Tracker Shield
   private val stealthDomains: HashSet<String> =
     hashSetOf(
       "fingerprint.com",
@@ -210,6 +217,7 @@ object TurboShield {
       "/analytics.js",
       "/gtag/js",
       "/prebid",
+      "/tag/js/",
     )
 
   private val adGuardPathKeywords =
@@ -225,6 +233,8 @@ object TurboShield {
       "/pixel.gif",
       "/px.gif",
       "/tr?id=",
+      "/ads/pixel",
+      "/collect?",
     )
 
   private val strictPathKeywords =
@@ -235,6 +245,7 @@ object TurboShield {
       "/blockadblock",
       "/cookie-consent",
       "/gdpr-banner",
+      "/consent-notice",
     )
 
   const val ESTIMATED_BYTES_PER_BLOCKED_REQUEST = 48_000L
@@ -283,32 +294,127 @@ object TurboShield {
 
   fun cosmeticFilterScript(blockerType: AdBlockerType): String? {
     if (blockerType == AdBlockerType.OFF || blockerType == AdBlockerType.STANDARD) return null
-    val baseAdGuardCss =
-      "ins.adsbygoogle,[id^='google_ads_'],[id*='taboola'],[id*='outbrain'],.taboola,.outbrain,[data-ad-slot],[data-google-query-id],.ad-banner,.ad-container,.sponsored-ad,amp-ad,amp-embed,[aria-label='Advertisement']{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;}"
+
+    // Robust, aggressive CSS stylesheet to hide and collapse all known ad selectors, sponsored badges, banners, and cookie popups
+    val robustCss = """
+      ins.adsbygoogle,
+      .adsbygoogle,
+      [id^='google_ads_'],
+      [id*='taboola'],
+      [id*='outbrain'],
+      .taboola,
+      .outbrain,
+      [data-ad-slot],
+      [data-google-query-id],
+      .ad-banner,
+      .ad-container,
+      .sponsored-ad,
+      .sponsored_content,
+      amp-ad,
+      amp-embed,
+      [aria-label='Advertisement'],
+      [class*='ad-container'],
+      [class*='ad-banner'],
+      [class*='advertisement'],
+      [id*='div-gpt-ad'],
+      div[id^='ad-'],
+      div[class^='ad-'],
+      aside[class*='sponsor'],
+      div[class*='sponsored'],
+      div[id*='sponsored'],
+      iframe[src*='doubleclick'],
+      iframe[src*='googlesyndication'],
+      iframe[src*='ads'],
+      iframe[src*='adservice'] {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        max-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        pointer-events: none !important;
+        opacity: 0 !important;
+      }
+    """.trimIndent().replace("\n", " ")
+
     val strictExtrasCss =
       if (blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) {
-        ".fc-consent-root,#onetrust-consent-sdk,#CybotCookiebotDialog,.qc-cmp2-container,[class*='cookie-banner'],[id*='cookie-consent'],[id*='adblock-modal']{display:none!important;}"
-      } else {
-        ""
-      }
-    val fullCss = baseAdGuardCss + strictExtrasCss
-    val popupGuard =
-      if (blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) {
         """
-        if (!window.__voltPopupGuard) {
-          window.__voltPopupGuard = true;
-          var origOpen = window.open;
-          window.open = function(url, name, specs) {
-            if (!url || /doubleclick|popads|popcash|propeller|adsterra|exoclick|taboola|outbrain/i.test(String(url))) {
-              return null;
-            }
-            return origOpen ? origOpen.apply(window, arguments) : null;
-          };
+        .fc-consent-root,
+        #onetrust-consent-sdk,
+        #CybotCookiebotDialog,
+        .qc-cmp2-container,
+        [class*='cookie-banner'],
+        [id*='cookie-consent'],
+        [id*='adblock-modal'],
+        [class*='paywall-banner'] {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
         }
-        """.trimIndent()
+        """.trimIndent().replace("\n", " ")
       } else {
         ""
       }
+
+    val fullCss = robustCss + " " + strictExtrasCss
+
+    // Bulletproof MutationObserver JS engine that continuously sweeps the DOM for newly injected ads/popups
+    val mutationEngine = """
+      if (!window.__voltAdRemoverActive) {
+        window.__voltAdRemoverActive = true;
+        window.__voltPopupGuard = true;
+
+        // 1. CSS Injection
+        var styleId = 'volt-robust-ad-remover';
+        var styleEl = document.getElementById(styleId);
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = styleId;
+          (document.head || document.documentElement).appendChild(styleEl);
+        }
+        styleEl.textContent = "${fullCss.replace("\"", "\\\"")}";
+
+        // 2. Popup & Popunder Protector
+        var origOpen = window.open;
+        window.open = function(url, name, specs) {
+          if (!url || /doubleclick|popads|popcash|propeller|adsterra|exoclick|taboola|outbrain|tsyndicate|adservice/i.test(String(url))) {
+            return null;
+          }
+          return origOpen ? origOpen.apply(window, arguments) : null;
+        };
+
+        // 3. Dynamic Mutation Observer for lazy-loaded ads & banners
+        function purgeAds() {
+          try {
+            var selectors = 'ins.adsbygoogle, .adsbygoogle, [id^="google_ads_"], [id*="taboola"], [id*="outbrain"], .taboola, .outbrain, [data-ad-slot], .ad-banner, .ad-container, .sponsored-ad, amp-ad, amp-embed, [class*="advertisement"], [class*="ad-container"], [id*="div-gpt-ad"], iframe[src*="doubleclick"], iframe[src*="googlesyndication"], iframe[src*="ads"]';
+            var ads = document.querySelectorAll(selectors);
+            for (var i = 0; i < ads.length; i++) {
+              var el = ads[i];
+              if (el && el.parentNode) {
+                el.style.setProperty('display', 'none', 'important');
+                el.style.setProperty('visibility', 'hidden', 'important');
+                el.style.setProperty('height', '0px', 'important');
+                el.remove();
+              }
+            }
+          } catch(e) {}
+        }
+
+        if (document.body) {
+          var observer = new MutationObserver(function(mutations) {
+            clearTimeout(window.__voltAdDebounce);
+            window.__voltAdDebounce = setTimeout(purgeAds, 120);
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+        }
+        window.addEventListener('DOMContentLoaded', purgeAds);
+        window.addEventListener('load', purgeAds);
+      }
+    """.trimIndent()
+
     val stealthScript =
       if (blockerType == AdBlockerType.STEALTH) {
         """
@@ -348,18 +454,11 @@ object TurboShield {
       } else {
         ""
       }
+
     return """
       (function(){
         try {
-          var id = 'volt-adguard-cosmetic';
-          var existing = document.getElementById(id);
-          if (!existing) {
-            existing = document.createElement('style');
-            existing.id = id;
-            (document.head || document.documentElement).appendChild(existing);
-          }
-          existing.textContent = "$fullCss";
-          $popupGuard
+          $mutationEngine
           $stealthScript
         } catch(e) {}
       })();

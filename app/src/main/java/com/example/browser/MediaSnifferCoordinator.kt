@@ -65,8 +65,7 @@ class MediaSnifferCoordinator(
             val hlsVideos =
               result.resolvedItems.filter {
                 it.kind == MediaKind.STREAM_HLS &&
-                  (it.segmentCount ?: 0) > 0 &&
-                  (it.contentSizeBytes ?: 0L) > MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES
+                  (it.segmentCount ?: 0) > 0
               }.toMutableList()
 
             val nestedUninspectedHls =
@@ -79,21 +78,16 @@ class MediaSnifferCoordinator(
               hlsVideos.addAll(
                 nestedRes.resolvedItems.filter {
                   it.kind == MediaKind.STREAM_HLS &&
-                    (it.segmentCount ?: 0) > 0 &&
-                    (it.contentSizeBytes ?: 0L) > MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES
+                    (it.segmentCount ?: 0) > 0
                 }
               )
-              if (nestedRes.isParentDownloadableVideo &&
-                (nestedRes.updatedParent.contentSizeBytes ?: 0L) > MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES
-              ) {
+              if (nestedRes.isParentDownloadableVideo) {
                 hlsVideos.add(nestedRes.updatedParent)
               }
             }
 
             val verifiedToAdd = mutableListOf<DetectedMediaItem>()
-            if (result.isParentDownloadableVideo &&
-              (result.updatedParent.contentSizeBytes ?: 0L) > MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES
-            ) {
+            if (result.isParentDownloadableVideo) {
               verifiedToAdd.add(result.updatedParent.copy(isResolvingMetadata = false))
             }
             verifiedToAdd.addAll(hlsVideos.map { it.copy(isResolvingMetadata = false) })
@@ -118,7 +112,7 @@ class MediaSnifferCoordinator(
             if (verifiedToAdd.isNotEmpty()) {
               upsertVerifiedDownloadableVideos(tabId, verifiedToAdd.distinctBy { it.url })
               if (isManualResolve) {
-                onShowMessage("Found ${verifiedToAdd.distinctBy { it.url }.size} downloadable video(s) > 1 MB")
+                onShowMessage("Found ${verifiedToAdd.distinctBy { it.url }.size} downloadable video(s)")
               }
             } else {
               if (forceReprobe) {
@@ -175,8 +169,7 @@ class MediaSnifferCoordinator(
     probe: MediaSniffer.VideoProbeResult,
   ): DetectedMediaItem? {
     if (!probe.isDownloadable) return null
-    val verifiedSize = probe.contentSizeBytes ?: return null
-    if (verifiedSize <= MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES) return null
+    val verifiedSize = probe.contentSizeBytes ?: baseItem.contentSizeBytes ?: 0L
 
     val finalUrl =
       probe.resolvedUrl?.takeIf {
@@ -234,8 +227,7 @@ class MediaSnifferCoordinator(
         merged.values
           .filter { item ->
             (item.kind == MediaKind.VIDEO || item.kind == MediaKind.STREAM_HLS) &&
-              !item.url.contains("#dash_") &&
-              (item.contentSizeBytes ?: 0L) > MediaSniffer.MIN_DOWNLOADABLE_VIDEO_BYTES
+              !item.url.contains("#dash_")
           }
           .sortedWith(
             compareBy<DetectedMediaItem> { if (it.kind == MediaKind.VIDEO) 0 else 1 }
