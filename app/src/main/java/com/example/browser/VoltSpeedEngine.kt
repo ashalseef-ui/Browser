@@ -221,11 +221,6 @@ class VoltSpeedEngine(private val context: Context) {
     clearNetworkPools()
   }
 
-  sealed class OmniboxResolution {
-    data class NavigateUrl(val url: String, val engineUsed: SearchEngine? = null) : OmniboxResolution()
-    data class OmniMultiSearch(val query: String) : OmniboxResolution()
-  }
-
   companion object {
     private const val MAX_PREWARMED_HOSTS = 256
 
@@ -235,91 +230,6 @@ class VoltSpeedEngine(private val context: Context) {
       if (host.startsWith('.') || host.endsWith('.')) return false
       if (!host.equals("localhost", ignoreCase = true) && !host.contains('.')) return false
       return true
-    }
-
-    /**
-     * Detects Firefox/DuckDuckGo-style bang shortcuts (e.g. "!w kotlin", "!g weather", "/b news", or "kotlin !w").
-     * Purely local string inspection — zero network calls.
-     */
-    fun detectBangShortcut(input: String): Pair<SearchEngine, String>? {
-      val trimmed = input.trim()
-      if (trimmed.isEmpty()) return null
-      val firstSpace = trimmed.indexOfFirst { it.isWhitespace() }
-      if (firstSpace > 0) {
-        val leadingToken = trimmed.substring(0, firstSpace)
-        val engine = SearchEngine.fromBang(leadingToken)
-        if (engine != null) {
-          val remainder = trimmed.substring(firstSpace + 1).trim()
-          return engine to remainder
-        }
-      } else {
-        val soloEngine = SearchEngine.fromBang(trimmed)
-        if (soloEngine != null) {
-          return soloEngine to ""
-        }
-      }
-      val lastSpace = trimmed.lastIndexOfAny(charArrayOf(' ', '\t'))
-      if (lastSpace > 0 && lastSpace < trimmed.lastIndex) {
-        val trailingToken = trimmed.substring(lastSpace + 1)
-        val engine = SearchEngine.fromBang(trailingToken)
-        if (engine != null) {
-          val remainder = trimmed.substring(0, lastSpace).trim()
-          return engine to remainder
-        }
-      }
-      return null
-    }
-
-    fun extractOmniBangQuery(input: String): String? {
-      val trimmed = input.trim()
-      if (trimmed.isEmpty()) return null
-      val firstSpace = trimmed.indexOfFirst { it.isWhitespace() }
-      if (firstSpace <= 0) return null
-      val prefix = trimmed.substring(0, firstSpace).lowercase()
-      if (prefix == "!omni" || prefix == "/omni" || prefix == "!!") {
-        return trimmed.substring(firstSpace + 1).trim().takeIf { it.isNotEmpty() }
-      }
-      return null
-    }
-
-    fun resolveOmniboxInput(
-      input: String,
-      defaultEngine: SearchEngine,
-      forceUrlOnly: Boolean = false,
-    ): OmniboxResolution? {
-      val trimmed = input.trim()
-      if (trimmed.isEmpty()) return null
-
-      if (!forceUrlOnly) {
-        extractOmniBangQuery(trimmed)?.let { multiQuery ->
-          return OmniboxResolution.OmniMultiSearch(multiQuery)
-        }
-        val bang = detectBangShortcut(trimmed)
-        if (bang != null) {
-          val (engine, query) = bang
-          if (query.isNotBlank()) {
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            return OmniboxResolution.NavigateUrl(
-              url = engine.searchUrlTemplate.replace("%s", encoded),
-              engineUsed = engine,
-            )
-          }
-          // Bare bang like "!w" opens that engine's home domain directly
-          return OmniboxResolution.NavigateUrl(
-            url = "https://${engine.domain}",
-            engineUsed = engine,
-          )
-        }
-      }
-
-      val url = normalizeInputToUrl(trimmed, defaultEngine, forceUrlOnly) ?: return null
-      val engineUsed =
-        if (url == "https://$trimmed" || trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) {
-          null
-        } else {
-          defaultEngine
-        }
-      return OmniboxResolution.NavigateUrl(url = url, engineUsed = engineUsed)
     }
 
     fun normalizeInputToUrl(

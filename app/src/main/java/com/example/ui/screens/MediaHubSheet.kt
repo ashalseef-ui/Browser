@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -89,6 +91,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
@@ -106,6 +109,9 @@ fun MediaHubSheet(
   detectedMedia: List<DetectedMediaItem>,
   isScanningMedia: Boolean,
   downloads: List<DownloadItemEntity>,
+  currentHost: String = "",
+  isSiteBypassEnabled: Boolean = false,
+  onToggleSiteBypass: () -> Unit = {},
   onRescanPage: () -> Unit,
   onResolvePlaylistUrl: (String) -> Unit,
   onRequerySizes: () -> Unit,
@@ -321,6 +327,65 @@ fun MediaHubSheet(
                     ),
                 ) {
                   Text("Resolve")
+                }
+              }
+            }
+
+            if (currentHost.isNotBlank()) {
+              item {
+                val bypassTint = if (isSiteBypassEnabled) voltColors.amberAccent else voltColors.cyanAccent
+                Surface(
+                  shape = RoundedCornerShape(14.dp),
+                  color =
+                    if (isSiteBypassEnabled) voltColors.amberAccent.copy(alpha = 0.14f)
+                    else voltColors.cardSurface,
+                  border = BorderStroke(1.dp, bypassTint.copy(alpha = 0.45f)),
+                  modifier =
+                    Modifier.fillMaxWidth()
+                      .minimumInteractiveComponentSize()
+                      .clip(RoundedCornerShape(14.dp))
+                      .clickable(onClick = onToggleSiteBypass)
+                      .testTag("media_hub_site_bypass_chip"),
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Shield,
+                      contentDescription = null,
+                      tint = bypassTint,
+                      modifier = Modifier.size(18.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                      Text(
+                        text = "$currentHost • Media Compatibility Bypass",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                      )
+                      Text(
+                        text =
+                          if (isSiteBypassEnabled) "Shields paused & protected HTML5 players enabled"
+                          else "Tap if strict site blockers stop video playback",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                    }
+                    Surface(
+                      shape = RoundedCornerShape(100.dp),
+                      color = bypassTint.copy(alpha = 0.2f),
+                    ) {
+                      Text(
+                        text = if (isSiteBypassEnabled) "ACTIVE" else "ENABLE",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = bypassTint,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                      )
+                    }
+                  }
                 }
               }
             }

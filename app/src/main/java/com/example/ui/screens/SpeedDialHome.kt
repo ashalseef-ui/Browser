@@ -9,8 +9,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,7 +23,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Shield
@@ -63,7 +60,7 @@ import com.example.ui.components.formatBytes
 import com.example.ui.theme.LocalVoltColors
 import com.example.ui.theme.VoltCyan
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SpeedDialHome(
   isIncognito: Boolean,
@@ -73,7 +70,6 @@ fun SpeedDialHome(
   onPrewarmUrl: (String) -> Unit,
   onOpenSecuritySheet: () -> Unit,
   onAddSpeedDialClick: () -> Unit,
-  onOpenOmniSearch: () -> Unit,
   onLongPressTile: (BookmarkEntity) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -159,6 +155,7 @@ fun SpeedDialHome(
                 AdBlockerType.STANDARD -> voltColors.emeraldShield
                 AdBlockerType.ADGUARD -> voltColors.emeraldShield
                 AdBlockerType.STRICT -> voltColors.cyanAccent
+                AdBlockerType.STEALTH -> voltColors.cyanAccent
               }
 
             Column(
@@ -279,88 +276,6 @@ fun SpeedDialHome(
                   tint = voltColors.amberAccent,
                   modifier = Modifier.weight(1f),
                 )
-              }
-            }
-          }
-        }
-      }
-
-      // Omni-Engine Multi-Search Spotlight Card
-      item {
-        Card(
-          modifier =
-            Modifier.fillMaxWidth()
-              .clip(cardShape)
-              .clickable(onClick = onOpenOmniSearch)
-              .testTag("omni_search_home_banner"),
-          shape = cardShape,
-          colors =
-            CardDefaults.cardColors(
-              containerColor =
-                if (isZenLight) MaterialTheme.colorScheme.surface
-                else voltColors.cardSurface
-            ),
-          border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.45f)),
-        ) {
-          Column(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              Surface(
-                shape = CircleShape,
-                color = voltColors.cyanAccent.copy(alpha = 0.16f),
-                modifier = Modifier.size(42.dp),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = Icons.Default.Speed,
-                    contentDescription = null,
-                    tint = voltColors.cyanAccent,
-                    modifier = Modifier.size(21.dp),
-                  )
-                }
-              }
-              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                  text = "Omni-Engine Multi-Search",
-                  style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                  color = voltColors.cyanAccent,
-                )
-                Text(
-                  text = "Compare results across 5 independent search engines in parallel",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = "Launch Omni-Search",
-                tint = voltColors.cyanAccent,
-                modifier = Modifier.size(18.dp),
-              )
-            }
-
-            FlowRow(
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              listOf("SearXNG", "Mojeek", "Marginalia", "Brave", "DuckDuckGo").forEach { tag ->
-                Surface(
-                  shape = pillShape,
-                  color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                ) {
-                  Text(
-                    text = tag,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                  )
-                }
               }
             }
           }

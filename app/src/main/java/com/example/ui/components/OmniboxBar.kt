@@ -1,7 +1,5 @@
 package com.example.ui.components
 
-import android.content.ClipDescription
-import android.content.Context
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -71,13 +69,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -85,12 +80,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.browser.VoltSpeedEngine
 import com.example.data.AdBlockerType
 import com.example.data.BrowserTabState
 import com.example.data.SearchEngine
 import com.example.ui.theme.LocalVoltColors
 import com.example.ui.theme.badgeAccentColor
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.mutableFloatStateOf
 import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -98,6 +94,8 @@ import kotlin.math.abs
 fun OmniboxDock(
   tab: BrowserTabState,
   tabCount: Int,
+  previousTabTitle: String = "",
+  nextTabTitle: String = "",
   searchEngine: SearchEngine,
   adBlockerType: AdBlockerType,
   isVpnActive: Boolean,
@@ -118,7 +116,6 @@ fun OmniboxDock(
   onOpenMediaHub: () -> Unit,
   onOpenTabs: () -> Unit,
   onOpenMenu: () -> Unit,
-  onOpenOmniSearch: (String) -> Unit,
   onRequestExit: () -> Unit,
   onShowToast: (String) -> Unit = {},
   onSwipeLeft: () -> Unit = {},
@@ -126,14 +123,13 @@ fun OmniboxDock(
   modifier: Modifier = Modifier,
 ) {
   val voltColors = LocalVoltColors.current
-  val context = LocalContext.current
   val focusManager = LocalFocusManager.current
   val haptics = LocalHapticFeedback.current
-  val clipboard = LocalClipboardManager.current
 
   var isFocused by remember { mutableStateOf(false) }
   var isEngineTrayOpen by remember { mutableStateOf(false) }
   var swipeDirection by remember { mutableIntStateOf(1) }
+  var tabSwipeDragX by remember { mutableFloatStateOf(0f) }
   var inputText by remember(tab.id, tab.url, tab.isSpeedDial) {
     mutableStateOf(if (tab.isSpeedDial) "" else tab.url)
   }
@@ -143,31 +139,6 @@ fun OmniboxDock(
   val latestOnCycleEngine by rememberUpdatedState(onCycleSearchEngine)
   val latestOnOpenTabs by rememberUpdatedState(onOpenTabs)
   val latestIsFocused by rememberUpdatedState(isFocused)
-
-  // Live local bang detection (e.g. "!w kotlin" -> previews Wikipedia badge without network calls)
-  val bangPreview = remember(inputText) { VoltSpeedEngine.detectBangShortcut(inputText)?.first }
-  val isOmniBangActive =
-    remember(inputText) {
-      val low = inputText.trim().lowercase()
-      low.startsWith("!omni") || low.startsWith("/omni") || low.startsWith("!!")
-    }
-  val effectiveEngine = bangPreview ?: searchEngine
-
-  // Check clipboard MIME type only (does NOT call getPrimaryClip() so Android 12+ shows no paste toast)
-  val hasClipboardText =
-    remember(isFocused) {
-      if (!isFocused) {
-        false
-      } else {
-        runCatching {
-          val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-          val desc = cm?.primaryClipDescription
-          cm?.hasPrimaryClip() == true &&
-            (desc?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true ||
-              desc?.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML) == true)
-        }.getOrDefault(false)
-      }
-    }
 
   LaunchedEffect(tab.url, tab.isSpeedDial) {
     if (!isFocused) {
@@ -183,18 +154,104 @@ fun OmniboxDock(
     tonalElevation = 6.dp,
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-      // On phone bottom dock, expand the Firefox-style engine & smart-action tray right ABOVE the address bar
+      // Sleek Interactive Gesture Handle (Phone Bottom Dock: Swipe L/R = Tab Peek, Up = Tabs, Down = Collapse)
+      if (showBottomNavControls) {
+        Box(
+          modifier =
+            Modifier.fillMaxWidth()
+              .height(16.dp)
+              .pointerInput(tabCount) {
+                var sumX = 0f
+                var sumY = 0f
+                detectDragGestures(
+                  onDragStart = {
+                    sumX = 0f
+                    sumY = 0f
+                    tabSwipeDragX = 0f
+                  },
+                  onDrag = { change, dragAmount ->
+                    change.consume()
+                    sumX += dragAmount.x
+                    sumY += dragAmount.y
+                    if (tabCount > 1 && abs(sumX) > abs(sumY)) {
+                      tabSwipeDragX = sumX
+                    }
+                  },
+                  onDragEnd = {
+                    if (abs(sumX) > abs(sumY)) {
+                      if (tabCount > 1) {
+                        if (sumX > 48f) {
+                          haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                          latestOnSwipeRight()
+                        } else if (sumX < -48f) {
+                          haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                          latestOnSwipeLeft()
+                        }
+                      }
+                    } else if (sumY < -28f) {
+                      haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                      latestOnOpenTabs()
+                    } else if (sumY > 28f) {
+                      isEngineTrayOpen = false
+                      focusManager.clearFocus()
+                    }
+                    tabSwipeDragX = 0f
+                  },
+                  onDragCancel = { tabSwipeDragX = 0f },
+                )
+              }
+              .testTag("omnibox_gesture_handle"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(
+            modifier =
+              Modifier.width(38.dp)
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(
+                  if (abs(tabSwipeDragX) >= 48f) voltColors.cyanAccent
+                  else MaterialTheme.colorScheme.outlineVariant
+                )
+          )
+        }
+      }
+
+      // Live Tab-Peek Gesture Banner when swiping horizontally across bottom handle / tab pill
+      AnimatedVisibility(visible = showBottomNavControls && tabCount > 1 && abs(tabSwipeDragX) > 18f) {
+        val isSwipingNext = tabSwipeDragX < 0f
+        val peekTitle =
+          if (isSwipingNext) nextTabTitle.ifBlank { "Next Tab" }
+          else previousTabTitle.ifBlank { "Previous Tab" }
+        val armed = abs(tabSwipeDragX) >= 48f
+        Box(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Surface(
+            shape = RoundedCornerShape(100.dp),
+            color =
+              if (armed) voltColors.cyanAccent.copy(alpha = 0.2f)
+              else MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(1.dp, if (armed) voltColors.cyanAccent else voltColors.cardBorder),
+          ) {
+            Text(
+              text = if (isSwipingNext) "$peekTitle  →" else "←  $peekTitle",
+              style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+              color = if (armed) voltColors.cyanAccent else MaterialTheme.colorScheme.onSurface,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+          }
+        }
+      }
+
+      // On phone bottom dock, expand the Firefox-style engine selector right ABOVE the address bar
       if (showBottomNavControls) {
         AnimatedVisibility(visible = showQuickBar) {
           OmniboxQuickBar(
             activeEngine = searchEngine,
-            previewEngine = bangPreview,
-            isOmniBangActive = isOmniBangActive,
             isFocused = isFocused,
-            inputText = inputText,
-            currentTabUrl = tab.url,
-            isSpeedDial = tab.isSpeedDial,
-            hasClipboardText = hasClipboardText,
             onSelectEngine = { chosen ->
               val q = inputText.trim()
               onSelectSearchEngine(chosen)
@@ -210,36 +267,6 @@ fun OmniboxDock(
             onLongPressSetDefault = { chosen ->
               onSelectSearchEngine(chosen)
               onShowToast("Default search: ${chosen.displayName}")
-            },
-            onLaunchOmniSearch = {
-              val q =
-                VoltSpeedEngine.extractOmniBangQuery(inputText)
-                  ?: inputText.trim().takeUnless { it == tab.url.trim() }.orEmpty()
-              isFocused = false
-              isEngineTrayOpen = false
-              focusManager.clearFocus()
-              onOpenOmniSearch(q)
-            },
-            onPasteAndGo = {
-              val clip = clipboard.getText()?.text?.trim().orEmpty()
-              if (clip.isNotEmpty()) {
-                isFocused = false
-                isEngineTrayOpen = false
-                focusManager.clearFocus()
-                onNavigate(clip, null)
-              } else {
-                onShowToast("Clipboard is empty")
-              }
-            },
-            onInjectText = { next ->
-              inputText = next
-              onQueryChange(next)
-            },
-            onCopyCurrentUrl = {
-              if (tab.url.isNotBlank()) {
-                clipboard.setText(AnnotatedString(tab.url))
-                onShowToast("Page URL copied")
-              }
             },
             onCloseTray = { isEngineTrayOpen = false },
           )
@@ -264,15 +291,22 @@ fun OmniboxDock(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
-        // Security / AdBlocker Shield Button
-        val blockerActive = adBlockerType != AdBlockerType.OFF
+        // Security / AdBlocker Shield Button (highlights BYP when Site Media Compatibility Bypass is active)
+        val blockerActive = adBlockerType != AdBlockerType.OFF && !tab.isMediaCompatBypassEnabled
         val shieldTint =
           when {
+            tab.isMediaCompatBypassEnabled -> voltColors.amberAccent
             tab.isIncognito -> voltColors.incognitoAccent
             !tab.isSpeedDial && !tab.isSecure -> voltColors.amberAccent
             adBlockerType == AdBlockerType.STRICT -> voltColors.cyanAccent
             blockerActive -> voltColors.emeraldShield
             else -> MaterialTheme.colorScheme.onSurfaceVariant
+          }
+        val shieldLabel =
+          when {
+            tab.isMediaCompatBypassEnabled -> "BYP"
+            tab.trackersBlockedOnPage > 0 -> "${adBlockerType.badgeLabel}·${tab.trackersBlockedOnPage}"
+            else -> adBlockerType.badgeLabel
           }
         Box(
           modifier =
@@ -280,6 +314,7 @@ fun OmniboxDock(
               .clip(RoundedCornerShape(100.dp))
               .background(
                 when {
+                  tab.isMediaCompatBypassEnabled -> voltColors.amberAccent.copy(alpha = 0.16f)
                   tab.isIncognito -> voltColors.incognitoAccent.copy(alpha = 0.16f)
                   blockerActive -> shieldTint.copy(alpha = 0.14f)
                   else -> MaterialTheme.colorScheme.surfaceContainerHigh
@@ -287,7 +322,9 @@ fun OmniboxDock(
               )
               .border(
                 width = 1.dp,
-                color = if (blockerActive) shieldTint.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant,
+                color =
+                  if (blockerActive || tab.isMediaCompatBypassEnabled) shieldTint.copy(alpha = 0.45f)
+                  else MaterialTheme.colorScheme.outlineVariant,
                 shape = RoundedCornerShape(100.dp),
               )
               .clickable(onClick = onOpenSecuritySheet)
@@ -302,6 +339,7 @@ fun OmniboxDock(
             Icon(
               imageVector =
                 when {
+                  tab.isMediaCompatBypassEnabled -> Icons.Default.Warning
                   tab.isSpeedDial -> Icons.Default.Shield
                   tab.isSecure -> Icons.Default.Lock
                   else -> Icons.Default.Warning
@@ -311,9 +349,7 @@ fun OmniboxDock(
               modifier = Modifier.size(15.dp),
             )
             Text(
-              text =
-                if (tab.trackersBlockedOnPage > 0) "${adBlockerType.badgeLabel}·${tab.trackersBlockedOnPage}"
-                else adBlockerType.badgeLabel,
+              text = shieldLabel,
               style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
               color = shieldTint,
               maxLines = 1,
@@ -323,7 +359,7 @@ fun OmniboxDock(
 
         // Address Input Pill with Inline Swipeable Firefox-Style Search Engine Selector
         val omniboxShape = RoundedCornerShape(24.dp)
-        val engineAccent = effectiveEngine.badgeAccentColor(voltColors.isLightTheme)
+        val engineAccent = searchEngine.badgeAccentColor(voltColors.isLightTheme)
         val omniboxBorderColor =
           when {
             isFocused -> engineAccent.copy(alpha = 0.85f)
@@ -412,7 +448,7 @@ fun OmniboxDock(
             contentAlignment = Alignment.Center,
           ) {
             AnimatedContent(
-              targetState = if (isOmniBangActive) null else effectiveEngine,
+              targetState = searchEngine,
               transitionSpec = {
                 val dir = swipeDirection
                 (slideInHorizontally { width -> dir * width / 2 } + fadeIn()) togetherWith
@@ -420,8 +456,8 @@ fun OmniboxDock(
               },
               label = "omnibox_engine_badge",
             ) { targetEngine ->
-              val badgeText = targetEngine?.badgeCode ?: "ALL"
-              val badgeColor = targetEngine?.badgeAccentColor(voltColors.isLightTheme) ?: voltColors.cyanAccent
+              val badgeText = targetEngine.badgeCode
+              val badgeColor = targetEngine.badgeAccentColor(voltColors.isLightTheme)
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -453,7 +489,7 @@ fun OmniboxDock(
                   contentDescription =
                     stringResource(
                       R.string.cd_search_engine_selector,
-                      targetEngine?.displayName ?: "Omni-Search",
+                      targetEngine.displayName,
                     ),
                   tint = badgeColor,
                   modifier = Modifier.size(13.dp),
@@ -468,7 +504,7 @@ fun OmniboxDock(
           ) {
             if (inputText.isEmpty()) {
               Text(
-                text = "Search ${effectiveEngine.shortLabel} or enter URL",
+                text = "Search ${searchEngine.shortLabel} or enter URL",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -610,18 +646,12 @@ fun OmniboxDock(
         }
       }
 
-      // On wide-screen top dock, expand the engine & smart-action tray right BELOW the address bar
+      // On wide-screen top dock, expand the engine selector right BELOW the address bar
       if (!showBottomNavControls) {
         AnimatedVisibility(visible = showQuickBar) {
           OmniboxQuickBar(
             activeEngine = searchEngine,
-            previewEngine = bangPreview,
-            isOmniBangActive = isOmniBangActive,
             isFocused = isFocused,
-            inputText = inputText,
-            currentTabUrl = tab.url,
-            isSpeedDial = tab.isSpeedDial,
-            hasClipboardText = hasClipboardText,
             onSelectEngine = { chosen ->
               val q = inputText.trim()
               onSelectSearchEngine(chosen)
@@ -637,36 +667,6 @@ fun OmniboxDock(
             onLongPressSetDefault = { chosen ->
               onSelectSearchEngine(chosen)
               onShowToast("Default search: ${chosen.displayName}")
-            },
-            onLaunchOmniSearch = {
-              val q =
-                VoltSpeedEngine.extractOmniBangQuery(inputText)
-                  ?: inputText.trim().takeUnless { it == tab.url.trim() }.orEmpty()
-              isFocused = false
-              isEngineTrayOpen = false
-              focusManager.clearFocus()
-              onOpenOmniSearch(q)
-            },
-            onPasteAndGo = {
-              val clip = clipboard.getText()?.text?.trim().orEmpty()
-              if (clip.isNotEmpty()) {
-                isFocused = false
-                isEngineTrayOpen = false
-                focusManager.clearFocus()
-                onNavigate(clip, null)
-              } else {
-                onShowToast("Clipboard is empty")
-              }
-            },
-            onInjectText = { next ->
-              inputText = next
-              onQueryChange(next)
-            },
-            onCopyCurrentUrl = {
-              if (tab.url.isNotBlank()) {
-                clipboard.setText(AnnotatedString(tab.url))
-                onShowToast("Page URL copied")
-              }
             },
             onCloseTray = { isEngineTrayOpen = false },
           )
@@ -731,7 +731,7 @@ fun OmniboxDock(
                 else MaterialTheme.colorScheme.onSurface,
             )
           }
-          // Tab Counter Pill (tap opens tabs; swipe left/right switches tabs)
+          // Tab Counter Pill (tap opens tabs; swipe left/right switches tabs with live peek banner)
           Box(
             modifier =
               Modifier.weight(1f)
@@ -740,18 +740,26 @@ fun OmniboxDock(
                 .pointerInput(Unit) {
                   var horizontalSum = 0f
                   detectHorizontalDragGestures(
-                    onDragStart = { horizontalSum = 0f },
+                    onDragStart = {
+                      horizontalSum = 0f
+                      tabSwipeDragX = 0f
+                    },
                     onHorizontalDrag = { change, dragAmount ->
                       change.consume()
                       horizontalSum += dragAmount
+                      tabSwipeDragX = horizontalSum
                     },
                     onDragEnd = {
-                      if (horizontalSum > 36f) {
+                      if (horizontalSum > 48f) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         latestOnSwipeRight()
-                      } else if (horizontalSum < -36f) {
+                      } else if (horizontalSum < -48f) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         latestOnSwipeLeft()
                       }
+                      tabSwipeDragX = 0f
                     },
+                    onDragCancel = { tabSwipeDragX = 0f },
                   )
                 }
                 .clickable(onClick = onOpenTabs)

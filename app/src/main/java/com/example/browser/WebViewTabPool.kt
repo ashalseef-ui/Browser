@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.HttpAuthHandler
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -177,8 +178,10 @@ class WebViewTabPool(
         ): WebResourceResponse? {
           val uri = request?.url ?: return null
           val isMainFrame = request.isForMainFrame
+          val pageUrl = currentUrls[tabId].orEmpty()
+          val isSiteBypassed = isHostMediaCompatBypassed(pageUrl)
 
-          if (!isMainFrame && currentSettings.liteModeEnabled) {
+          if (!isMainFrame && !isSiteBypassed && currentSettings.liteModeEnabled) {
             val (shouldBlockData, savedBytes) = VoltDataSaver.shouldBlockForDataSaver(uri)
             if (shouldBlockData) {
               mainScope.launch(Dispatchers.Main) {
@@ -189,6 +192,7 @@ class WebViewTabPool(
           }
 
           if (!isMainFrame &&
+            !isSiteBypassed &&
             currentSettings.adBlockerType != AdBlockerType.OFF &&
             TurboShield.shouldBlock(uri, currentSettings.adBlockerType)
           ) {
@@ -199,7 +203,6 @@ class WebViewTabPool(
           }
 
           val urlString = uri.toString()
-          val pageUrl = currentUrls[tabId].orEmpty()
           val pageTitle = currentTitles[tabId].orEmpty()
           val headers = request.requestHeaders.orEmpty()
           val requestReferer =
@@ -234,8 +237,10 @@ class WebViewTabPool(
           val startedAt = pageStartTimestamps.remove(tabId) ?: System.currentTimeMillis()
           val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
 
-          TurboShield.cosmeticFilterScript(currentSettings.adBlockerType)?.let { cssScript ->
-            view?.evaluateJavascript(cssScript, null)
+          if (!isHostMediaCompatBypassed(resolvedUrl)) {
+            TurboShield.cosmeticFilterScript(currentSettings.adBlockerType)?.let { cssScript ->
+              view?.evaluateJavascript(cssScript, null)
+            }
           }
           view?.evaluateJavascript(MediaSniffer.domSnifferScript, null)
 
@@ -302,6 +307,19 @@ class WebViewTabPool(
           callbacks.onHideFullscreenView()
         }
 
+        override fun onPermissionRequest(request: PermissionRequest?) {
+          request ?: return
+          val pageUrl = currentUrls[tabId].orEmpty()
+          val canGrantProtectedMedia =
+            isHostMediaCompatBypassed(pageUrl) &&
+              request.resources.contains(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)
+          if (canGrantProtectedMedia) {
+            request.grant(arrayOf(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID))
+          } else {
+            request.deny()
+          }
+        }
+
         override fun onCreateWindow(
           view: WebView?,
           isDialog: Boolean,
@@ -311,7 +329,9 @@ class WebViewTabPool(
           val hitResult = view?.hitTestResult
           val url = hitResult?.extra
           if (!url.isNullOrBlank() && (url.startsWith("http://") || url.startsWith("https://"))) {
-            if (currentSettings.adBlockerType == AdBlockerType.STRICT &&
+            val pageUrl = currentUrls[tabId].orEmpty()
+            if (!isHostMediaCompatBypassed(pageUrl) &&
+              currentSettings.adBlockerType == AdBlockerType.STRICT &&
               TurboShield.shouldBlock(Uri.parse(url), AdBlockerType.STRICT)
             ) {
               mainScope.launch(Dispatchers.Main) {
@@ -462,6 +482,7 @@ class WebViewTabPool(
 
   fun wipeAllCacheAndCookies() {
     savedStateBundles.clear()
+    mediaCompatBypassHosts.clear()
     webViews.values.forEach { speedEngine.wipeEphemeralCacheAndStorage(it, wipeGlobalProfileStorage = false) }
     wipePrivateProfileStorage()
     speedEngine.wipeEphemeralCacheAndStorage(null, wipeGlobalProfileStorage = true)
@@ -492,6 +513,7 @@ class WebViewTabPool(
     ids.forEach { destroyTab(it) }
     savedStateBundles.clear()
     incognitoTabIds.clear()
+    mediaCompatBypassHosts.clear()
     wipeAllCacheAndCookies()
     appliedWebSettings.clear()
     pageStartTimestamps.clear()
@@ -533,6 +555,33 @@ class WebViewTabPool(
     const val PRIVATE_PROFILE_NAME = "volt_private"
     const val MAX_SAVED_STATE_BYTES = 256 * 1024
     const val MAX_BLOB_DOWNLOAD_BYTES = 25 * 1024 * 1024
+
+    private val mediaCompatBypassHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    fun normalizeHostKey(urlOrHost: String?): String {
+      val raw = urlOrHost?.trim().orEmpty()
+      if (raw.isEmpty()) return ""
+      val host =
+        if (raw.contains("://")) runCatching { Uri.parse(raw).host }.getOrNull().orEmpty()
+        else raw.substringBefore('/').substringBefore(':')
+      return host.lowercase(Locale.US).removePrefix("www.")
+    }
+
+    fun setHostMediaCompatBypass(urlOrHost: String?, enabled: Boolean) {
+      val key = normalizeHostKey(urlOrHost)
+      if (key.isEmpty()) return
+      if (enabled) mediaCompatBypassHosts.add(key) else mediaCompatBypassHosts.remove(key)
+    }
+
+    fun isHostMediaCompatBypassed(urlOrHost: String?): Boolean {
+      val key = normalizeHostKey(urlOrHost)
+      if (key.isEmpty()) return false
+      return mediaCompatBypassHosts.contains(key)
+    }
+
+    fun clearMediaCompatBypassHosts() {
+      mediaCompatBypassHosts.clear()
+    }
 
     fun shouldProvideProxyCredentials(challengeHost: String?, activeProxyHost: String?): Boolean {
       val challenge = challengeHost?.trim().orEmpty()

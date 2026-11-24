@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
@@ -92,6 +93,7 @@ fun SecurityTelemetrySheet(
   onSelectAdBlockerType: (AdBlockerType) -> Unit,
   onToggleLiteMode: (Boolean) -> Unit,
   onToggleDarkWeb: (Boolean) -> Unit,
+  onToggleSiteMediaBypass: () -> Unit = {},
   onWipeSessionNow: () -> Unit,
   onDismiss: () -> Unit,
 ) {
@@ -228,9 +230,9 @@ fun SecurityTelemetrySheet(
             }
           }
 
-          Row(
+          Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             AdBlockerType.entries.forEach { blocker ->
               val selected = settings.adBlockerType == blocker
@@ -240,13 +242,7 @@ fun SecurityTelemetrySheet(
                   AdBlockerType.STANDARD -> voltColors.emeraldShield
                   AdBlockerType.ADGUARD -> voltColors.emeraldShield
                   AdBlockerType.STRICT -> voltColors.cyanAccent
-                }
-              val shortLabel =
-                when (blocker) {
-                  AdBlockerType.OFF -> "Off"
-                  AdBlockerType.STANDARD -> "Standard"
-                  AdBlockerType.ADGUARD -> "AdGuard"
-                  AdBlockerType.STRICT -> "Strict"
+                  AdBlockerType.STEALTH -> voltColors.cyanAccent
                 }
               Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -259,27 +255,50 @@ fun SecurityTelemetrySheet(
                     color = if (selected) accent else MaterialTheme.colorScheme.outlineVariant,
                   ),
                 modifier =
-                  Modifier.weight(1f)
+                  Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { onSelectAdBlockerType(blocker) }
                     .testTag("blocker_type_${blocker.name.lowercase()}"),
               ) {
-                Column(
-                  modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                  horizontalAlignment = Alignment.CenterHorizontally,
+                Row(
+                  modifier = Modifier.padding(12.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                  Text(
-                    text = shortLabel,
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = if (selected) accent else MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                  )
-                  Text(
-                    text = blocker.badgeLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                  )
+                  Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                      Text(
+                        text = blocker.displayName,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = if (selected) accent else MaterialTheme.colorScheme.onSurface,
+                      )
+                      Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = accent.copy(alpha = 0.2f),
+                      ) {
+                        Text(
+                          text = blocker.badgeLabel,
+                          style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                          color = accent,
+                          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                      }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                      text = blocker.subtitle,
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                  if (selected) {
+                    Icon(
+                      imageVector = Icons.Default.Check,
+                      contentDescription = null,
+                      tint = accent,
+                      modifier = Modifier.size(20.dp),
+                    )
+                  }
                 }
               }
             }
@@ -301,6 +320,61 @@ fun SecurityTelemetrySheet(
         checked = settings.darkWebEnabled,
         onCheckedChange = onToggleDarkWeb,
       )
+
+      // Per-Site Media Compatibility Bypass Card
+      val siteHost = if (tab.isSpeedDial) "" else extractHost(tab.url)
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color =
+          if (tab.isMediaCompatBypassEnabled) voltColors.amberAccent.copy(alpha = 0.12f)
+          else voltColors.cardSurface,
+        border =
+          BorderStroke(
+            1.dp,
+            if (tab.isMediaCompatBypassEnabled) voltColors.amberAccent.copy(alpha = 0.55f)
+            else voltColors.cardBorder,
+          ),
+        modifier = Modifier.fillMaxWidth().testTag("site_media_bypass_card"),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Default.PlayCircle,
+            contentDescription = null,
+            tint =
+              if (tab.isMediaCompatBypassEnabled) voltColors.amberAccent
+              else voltColors.cyanAccent,
+          )
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "Site Media Compatibility Bypass",
+              style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text =
+                when {
+                  tab.isSpeedDial -> "Open any media page to toggle per-site shield & player bypass"
+                  tab.isMediaCompatBypassEnabled ->
+                    "Active on $siteHost — blockers/Data Saver paused & protected HTML5 players allowed"
+                  else ->
+                    "Pause blockers & enable protected HTML5 media playback if $siteHost fails to play"
+                },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Switch(
+            checked = tab.isMediaCompatBypassEnabled,
+            enabled = !tab.isSpeedDial,
+            onCheckedChange = { onToggleSiteMediaBypass() },
+            modifier = Modifier.testTag("site_media_bypass_switch"),
+          )
+        }
+      }
 
       OutlinedButton(
         onClick = {
@@ -689,7 +763,7 @@ fun LibrarySettingsSheet(
                         color = MaterialTheme.colorScheme.onSurface,
                       )
                       Text(
-                        text = "${engine.domain}  •  ${engine.bangs.joinToString("  ")}",
+                        text = engine.domain,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                       )
@@ -889,62 +963,5 @@ fun ExitConfirmDialog(
         Text("Cancel")
       }
     },
-  )
-}
-
-@Composable
-fun OmniSearchDialog(
-  onConfirmMultiQuery: (String) -> Unit,
-  onDismiss: () -> Unit,
-) {
-  var queryText by remember { mutableStateOf("") }
-  val voltColors = LocalVoltColors.current
-
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    icon = {
-      Icon(
-        imageVector = Icons.Default.Speed,
-        contentDescription = null,
-        tint = voltColors.cyanAccent,
-      )
-    },
-    title = { Text("Omni-Engine Multi-Search") },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-          text = "Enter a search term to query SearXNG, Mojeek, Marginalia, Brave, and DuckDuckGo simultaneously in parallel tabs.",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-          value = queryText,
-          onValueChange = { queryText = it },
-          placeholder = { Text("Search all engines at once...") },
-          singleLine = true,
-          modifier = Modifier.fillMaxWidth().testTag("omni_search_input"),
-        )
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = {
-          if (queryText.isNotBlank()) {
-            onConfirmMultiQuery(queryText)
-            onDismiss()
-          }
-        },
-        enabled = queryText.isNotBlank(),
-        modifier = Modifier.testTag("omni_search_confirm_button"),
-      ) {
-        Text("Search All Engines")
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text("Cancel")
-      }
-    },
-    containerColor = MaterialTheme.colorScheme.surface,
   )
 }

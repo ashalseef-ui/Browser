@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.example.browser.MediaSniffer
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
 import com.google.common.util.concurrent.ListenableFuture
@@ -117,6 +118,7 @@ class MediaPlaybackManager(
   }
 
   fun playMedia(item: DetectedMediaItem) {
+    MediaSniffer.registerPlaybackContext(item.url, item.sourcePageUrl)
     _uiState.update {
       it.copy(
         isVisible = true,

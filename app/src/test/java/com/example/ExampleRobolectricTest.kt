@@ -745,68 +745,58 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `search engine cycles seamlessly and resolves bang shortcuts`() {
+  fun `search engine cycles seamlessly and normalizes queries and direct urls`() {
     val entries = SearchEngine.entries
     assertEquals(entries[1], entries.first().cycled(1))
     assertEquals(entries.last(), entries.first().cycled(-1))
     assertEquals(entries.first(), entries.last().cycled(1))
 
-    assertEquals(SearchEngine.WIKIPEDIA, SearchEngine.fromBang("!w"))
-    assertEquals(SearchEngine.GOOGLE, SearchEngine.fromBang("/G"))
-    assertEquals(SearchEngine.SEARXNG, SearchEngine.fromBang("!sx"))
-    assertEquals(SearchEngine.DUCKDUCKGO, SearchEngine.fromBang("!ddg"))
-    assertNull(SearchEngine.fromBang("!unknown"))
-    assertNull(SearchEngine.fromBang("plain"))
+    assertEquals(
+      "https://en.wikipedia.org/wiki/Special:Search?search=android+compose",
+      VoltSpeedEngine.normalizeInputToUrl("android compose", SearchEngine.WIKIPEDIA),
+    )
+    assertEquals(
+      "https://priv.au/search?q=privacy",
+      VoltSpeedEngine.normalizeInputToUrl("privacy", SearchEngine.SEARXNG),
+    )
+    assertEquals(
+      "https://wikipedia.org",
+      VoltSpeedEngine.normalizeInputToUrl("wikipedia.org", SearchEngine.DUCKDUCKGO),
+    )
+    assertEquals(
+      "https://search.brave.com/search?q=compose+swipe",
+      VoltSpeedEngine.normalizeInputToUrl("compose swipe", SearchEngine.BRAVE),
+    )
+    assertNull(VoltSpeedEngine.normalizeInputToUrl("compose swipe", SearchEngine.BRAVE, forceUrlOnly = true))
   }
 
   @Test
-  fun `volt speed engine resolves leading trailing bare bangs omni search and direct urls`() {
-    val leading = VoltSpeedEngine.detectBangShortcut("!w jetpack compose")
-    assertNotNull(leading)
-    assertEquals(SearchEngine.WIKIPEDIA, leading!!.first)
-    assertEquals("jetpack compose", leading.second)
+  fun `site media compat bypass host registry and playback header context work accurately`() {
+    WebViewTabPool.clearMediaCompatBypassHosts()
+    assertEquals("stream.example.com", WebViewTabPool.normalizeHostKey("https://www.Stream.Example.com/watch?v=1"))
+    assertFalse(WebViewTabPool.isHostMediaCompatBypassed("https://stream.example.com/video/1"))
 
-    val trailing = VoltSpeedEngine.detectBangShortcut("kotlin coroutines /g")
-    assertNotNull(trailing)
-    assertEquals(SearchEngine.GOOGLE, trailing!!.first)
-    assertEquals("kotlin coroutines", trailing.second)
+    WebViewTabPool.setHostMediaCompatBypass("https://www.stream.example.com/watch?v=1", true)
+    assertTrue(WebViewTabPool.isHostMediaCompatBypassed("https://stream.example.com/embed/42"))
 
-    val bare = VoltSpeedEngine.detectBangShortcut("!brave")
-    assertNotNull(bare)
-    assertEquals(SearchEngine.BRAVE, bare!!.first)
-    assertEquals("", bare.second)
+    WebViewTabPool.setHostMediaCompatBypass("stream.example.com", false)
+    assertFalse(WebViewTabPool.isHostMediaCompatBypassed("https://stream.example.com/embed/42"))
 
-    assertEquals("privacy browser", VoltSpeedEngine.extractOmniBangQuery("!omni privacy browser"))
-    assertEquals("android", VoltSpeedEngine.extractOmniBangQuery("!! android"))
-    assertNull(VoltSpeedEngine.extractOmniBangQuery("/omni"))
-    assertNull(VoltSpeedEngine.extractOmniBangQuery("normal search"))
+    WebViewTabPool.setHostMediaCompatBypass("media.test.org", true)
+    WebViewTabPool.clearMediaCompatBypassHosts()
+    assertFalse(WebViewTabPool.isHostMediaCompatBypassed("https://media.test.org/live"))
 
-    val omniRes = VoltSpeedEngine.resolveOmniboxInput("!omni zero leak", SearchEngine.DUCKDUCKGO)
-    assertTrue(omniRes is VoltSpeedEngine.OmniboxResolution.OmniMultiSearch)
-    assertEquals("zero leak", (omniRes as VoltSpeedEngine.OmniboxResolution.OmniMultiSearch).query)
+    MediaSniffer.clearPlaybackContexts()
+    val mediaUrl = "https://cdn.example.com/hls/master.m3u8?token=xyz"
+    val refererUrl = "https://player.example.com/embed/99"
+    MediaSniffer.registerPlaybackContext(mediaUrl, refererUrl, "VoltUA/1.0")
+    val ctx = MediaSniffer.getPlaybackContext(mediaUrl)
+    assertNotNull(ctx)
+    assertEquals(refererUrl, ctx!!.referer)
+    assertEquals("https://player.example.com", ctx.origin)
+    assertEquals("VoltUA/1.0", ctx.userAgent)
 
-    val bangRes = VoltSpeedEngine.resolveOmniboxInput("!w android", SearchEngine.DUCKDUCKGO)
-    assertTrue(bangRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
-    val bangNav = bangRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
-    assertEquals(SearchEngine.WIKIPEDIA, bangNav.engineUsed)
-    assertEquals("https://en.wikipedia.org/wiki/Special:Search?search=android", bangNav.url)
-
-    val bareBangRes = VoltSpeedEngine.resolveOmniboxInput("!sx", SearchEngine.DUCKDUCKGO)
-    assertTrue(bareBangRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
-    val bareNav = bareBangRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
-    assertEquals(SearchEngine.SEARXNG, bareNav.engineUsed)
-    assertEquals("https://priv.au", bareNav.url)
-
-    val urlRes = VoltSpeedEngine.resolveOmniboxInput("wikipedia.org", SearchEngine.DUCKDUCKGO)
-    assertTrue(urlRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
-    val urlNav = urlRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
-    assertNull(urlNav.engineUsed)
-    assertEquals("https://wikipedia.org", urlNav.url)
-
-    val defaultSearchRes = VoltSpeedEngine.resolveOmniboxInput("compose swipe", SearchEngine.BRAVE)
-    assertTrue(defaultSearchRes is VoltSpeedEngine.OmniboxResolution.NavigateUrl)
-    val defaultNav = defaultSearchRes as VoltSpeedEngine.OmniboxResolution.NavigateUrl
-    assertEquals(SearchEngine.BRAVE, defaultNav.engineUsed)
-    assertEquals("https://search.brave.com/search?q=compose+swipe", defaultNav.url)
+    MediaSniffer.clearPlaybackContexts()
+    assertNull(MediaSniffer.getPlaybackContext(mediaUrl))
   }
 }

@@ -83,7 +83,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.ui.components.EdgeGestureOverlay
 import com.example.ui.components.OmniboxDock
+import com.example.ui.components.extractHost
 import com.example.ui.screens.AddSpeedDialDialog
 import com.example.ui.screens.ExitConfirmDialog
 import com.example.ui.screens.FreePublicVpnSheet
@@ -91,7 +93,6 @@ import com.example.ui.screens.LibrarySettingsSheet
 import com.example.ui.screens.MediaHubSheet
 import com.example.ui.screens.MediaPlayerOverlay
 import com.example.ui.screens.MiniMediaPlayerBar
-import com.example.ui.screens.OmniSearchDialog
 import com.example.ui.screens.SecurityTelemetrySheet
 import com.example.ui.screens.SocialSidebarOverlay
 import com.example.ui.screens.SpeedDialHome
@@ -234,6 +235,13 @@ fun VoltBrowserScreen(
     val showPhoneBottomDock = !isWideScreen && !isInPipMode && !isBrowserFullscreen
     val showMiniPlayerInBar = mediaState.isVisible && mediaState.isMinimized && !isInPipMode && !isBrowserFullscreen
     val bottomBarConsumesNavInset = showPhoneBottomDock || showMiniPlayerInBar
+    val activeTabIndex = remember(tabs, activeTab.id) {
+      tabs.indexOfFirst { it.id == activeTab.id }.coerceAtLeast(0)
+    }
+    val previousTabTitle =
+      if (tabs.size > 1) tabs[(activeTabIndex - 1 + tabs.size) % tabs.size].title else ""
+    val nextTabTitle =
+      if (tabs.size > 1) tabs[(activeTabIndex + 1) % tabs.size].title else ""
 
     Scaffold(
       contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -268,6 +276,8 @@ fun VoltBrowserScreen(
               OmniboxDock(
                 tab = activeTab,
                 tabCount = tabs.size,
+                previousTabTitle = previousTabTitle,
+                nextTabTitle = nextTabTitle,
                 searchEngine = settings.searchEngine,
                 adBlockerType = settings.adBlockerType,
                 isVpnActive = vpnState.isAnyProtectionActive,
@@ -288,7 +298,6 @@ fun VoltBrowserScreen(
                 onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
                 onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
                 onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
-                onOpenOmniSearch = viewModel::openOmniSearchWithQuery,
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
                 onShowToast = viewModel::showMessage,
                 onSwipeLeft = viewModel::switchToNextTab,
@@ -426,6 +435,8 @@ fun VoltBrowserScreen(
               OmniboxDock(
                 tab = activeTab,
                 tabCount = tabs.size,
+                previousTabTitle = previousTabTitle,
+                nextTabTitle = nextTabTitle,
                 searchEngine = settings.searchEngine,
                 adBlockerType = settings.adBlockerType,
                 isVpnActive = vpnState.isAnyProtectionActive,
@@ -446,7 +457,6 @@ fun VoltBrowserScreen(
                 onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
                 onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
                 onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
-                onOpenOmniSearch = viewModel::openOmniSearchWithQuery,
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
                 onShowToast = viewModel::showMessage,
                 onSwipeLeft = viewModel::switchToNextTab,
@@ -475,7 +485,6 @@ fun VoltBrowserScreen(
                   onPrewarmUrl = viewModel.speedEngine::prewarmOrigin,
                   onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
                   onAddSpeedDialClick = { viewModel.openSheet(BrowserSheet.ADD_SPEED_DIAL) },
-                  onOpenOmniSearch = { viewModel.openSheet(BrowserSheet.OMNI_SEARCH) },
                   onLongPressTile = { bookmark ->
                     viewModel.showContextMenu(
                       WebContextMenuTarget(
@@ -488,30 +497,39 @@ fun VoltBrowserScreen(
                   },
                 )
               } else {
-                AndroidView(
-                  factory = { ctx -> FrameLayout(ctx) },
-                  update = { container ->
-                    val wv =
-                      viewModel.webViewPool.getOrCreateWebView(
-                        tabId = activeTab.id,
-                        isIncognito = activeTab.isIncognito,
-                        callbacks = viewModel.tabWebCallbacks,
-                        fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
-                      )
-                    if (container.childCount != 1 || container.getChildAt(0) !== wv) {
-                      container.removeAllViews()
-                      (wv.parent as? ViewGroup)?.removeView(wv)
-                      container.addView(
-                        wv,
-                        FrameLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                        ),
-                      )
-                    }
-                  },
-                  modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
-                )
+                EdgeGestureOverlay(
+                  enabled = !isBrowserFullscreen && !isInPipMode,
+                  canGoBack = activeTab.canGoBack,
+                  canGoForward = activeTab.canGoForward,
+                  onSwipeBack = { viewModel.goBack() },
+                  onSwipeForward = viewModel::goForward,
+                  modifier = Modifier.fillMaxSize(),
+                ) {
+                  AndroidView(
+                    factory = { ctx -> FrameLayout(ctx) },
+                    update = { container ->
+                      val wv =
+                        viewModel.webViewPool.getOrCreateWebView(
+                          tabId = activeTab.id,
+                          isIncognito = activeTab.isIncognito,
+                          callbacks = viewModel.tabWebCallbacks,
+                          fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
+                        )
+                      if (container.childCount != 1 || container.getChildAt(0) !== wv) {
+                        container.removeAllViews()
+                        (wv.parent as? ViewGroup)?.removeView(wv)
+                        container.addView(
+                          wv,
+                          FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                          ),
+                        )
+                      }
+                    },
+                    modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
+                  )
+                }
               }
 
               if (!isInPipMode) {
@@ -573,6 +591,7 @@ fun VoltBrowserScreen(
         activeTabId = activeTab.id,
         onSelectTab = viewModel::selectTab,
         onCloseTab = viewModel::closeTab,
+        onCloseAllTabs = viewModel::closeAllTabs,
         onNewTab = { incognito -> viewModel.newTab(isIncognito = incognito) },
         onDismiss = viewModel::closeSheet,
       )
@@ -637,6 +656,9 @@ fun VoltBrowserScreen(
           detectedMedia = activeTab.detectedMedia,
           isScanningMedia = activeTab.isScanningMedia,
           downloads = downloads,
+          currentHost = if (activeTab.isSpeedDial) "" else extractHost(activeTab.url),
+          isSiteBypassEnabled = activeTab.isMediaCompatBypassEnabled,
+          onToggleSiteBypass = viewModel::toggleCurrentSiteMediaCompatBypass,
           onRescanPage = viewModel::rescanActivePageMedia,
           onResolvePlaylistUrl = viewModel::resolveMediaOrPlaylistUrl,
           onRequerySizes = viewModel::requeryAllMediaSizes,
@@ -681,6 +703,7 @@ fun VoltBrowserScreen(
           onSelectAdBlockerType = viewModel::setAdBlockerType,
           onToggleLiteMode = viewModel::toggleLiteMode,
           onToggleDarkWeb = viewModel::toggleDarkWeb,
+          onToggleSiteMediaBypass = viewModel::toggleCurrentSiteMediaCompatBypass,
           onWipeSessionNow = viewModel::wipeSessionCacheAndCookies,
           onDismiss = viewModel::closeSheet,
         )
@@ -709,12 +732,6 @@ fun VoltBrowserScreen(
       BrowserSheet.ADD_SPEED_DIAL -> {
         AddSpeedDialDialog(
           onConfirm = viewModel::addSpeedDial,
-          onDismiss = viewModel::closeSheet,
-        )
-      }
-      BrowserSheet.OMNI_SEARCH -> {
-        OmniSearchDialog(
-          onConfirmMultiQuery = viewModel::openOmniMultiQuery,
           onDismiss = viewModel::closeSheet,
         )
       }

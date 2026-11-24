@@ -38,7 +38,6 @@ import com.example.vpn.PublicRelayNode
 import com.example.vpn.VpnProxyCoordinator
 import com.example.vpn.VpnTunnelState
 import java.io.File
-import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -65,7 +64,6 @@ enum class BrowserSheet {
   ADD_SPEED_DIAL,
   VPN,
   EXIT_CONFIRM,
-  OMNI_SEARCH,
 }
 
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
@@ -177,6 +175,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     object : TabWebCallbacks {
       override fun onPageStarted(tabId: String, url: String) {
         mediaSnifferCoordinator.resetTab(tabId)
+        val isBypassed = WebViewTabPool.isHostMediaCompatBypassed(url)
         updateTab(tabId) {
           it.copy(
             url = url,
@@ -184,6 +183,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             progress = 10,
             isSpeedDial = false,
             isSecure = url.startsWith("https://", ignoreCase = true),
+            isMediaCompatBypassEnabled = isBypassed,
             trackersBlockedOnPage = 0,
             bytesSavedOnPage = 0L,
             detectedMedia = emptyList(),
@@ -202,6 +202,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       ) {
         var blockedCount = 0
         var bytesSaved = 0L
+        val isBypassed = WebViewTabPool.isHostMediaCompatBypassed(url)
 
         updateTab(tabId) { tab ->
           blockedCount = tab.trackersBlockedOnPage
@@ -216,6 +217,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             canGoForward = canGoForward,
             isSpeedDial = false,
             isSecure = url.startsWith("https://", ignoreCase = true),
+            isMediaCompatBypassEnabled = isBypassed,
           )
         }
 
@@ -335,31 +337,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun navigate(rawInput: String, overrideEngine: SearchEngine? = null) {
     val trimmed = rawInput.trim()
     if (trimmed.isEmpty()) return
-    val resolution =
-      if (overrideEngine != null) {
-        val url = VoltSpeedEngine.normalizeInputToUrl(trimmed, overrideEngine) ?: return
-        VoltSpeedEngine.OmniboxResolution.NavigateUrl(url, overrideEngine)
-      } else {
-        VoltSpeedEngine.resolveOmniboxInput(trimmed, settings.value.searchEngine) ?: return
-      }
+    val engine = overrideEngine ?: settings.value.searchEngine
+    val targetUrl = VoltSpeedEngine.normalizeInputToUrl(trimmed, engine) ?: return
+    speedEngine.prewarmOrigin(targetUrl)
 
-    when (resolution) {
-      is VoltSpeedEngine.OmniboxResolution.OmniMultiSearch -> {
-        openOmniMultiQuery(resolution.query)
-      }
-      is VoltSpeedEngine.OmniboxResolution.NavigateUrl -> {
-        val targetUrl = resolution.url
-        speedEngine.prewarmOrigin(targetUrl)
-
-        val current = activeTab.value
-        updateTab(current.id) {
-          it.copy(url = targetUrl, isSpeedDial = false, isLoading = true, progress = 5)
-        }
-        val wv = webViewPool.getOrCreateWebView(current.id, current.isIncognito, tabWebCallbacks)
-        wv.loadUrl(targetUrl)
-        _activeSheet.value = BrowserSheet.NONE
-      }
+    val current = activeTab.value
+    updateTab(current.id) {
+      it.copy(
+        url = targetUrl,
+        isSpeedDial = false,
+        isLoading = true,
+        progress = 5,
+        isMediaCompatBypassEnabled = WebViewTabPool.isHostMediaCompatBypassed(targetUrl),
+      )
     }
+    val wv = webViewPool.getOrCreateWebView(current.id, current.isIncognito, tabWebCallbacks)
+    wv.loadUrl(targetUrl)
+    _activeSheet.value = BrowserSheet.NONE
   }
 
   fun hardReloadActiveTab() {
@@ -371,13 +365,25 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     showMessage("Hard reload (cache bypassed)")
   }
 
-  fun openOmniSearchWithQuery(query: String) {
-    val trimmed = query.trim()
-    if (trimmed.isNotEmpty()) {
-      openOmniMultiQuery(trimmed)
-    } else {
-      openSheet(BrowserSheet.OMNI_SEARCH)
+  fun toggleCurrentSiteMediaCompatBypass() {
+    val current = activeTab.value
+    if (current.isSpeedDial || current.url.isBlank()) {
+      showMessage("Open a website first to toggle Site Media Bypass")
+      return
     }
+    val host = WebViewTabPool.normalizeHostKey(current.url)
+    if (host.isEmpty()) return
+    val nextEnabled = !WebViewTabPool.isHostMediaCompatBypassed(current.url)
+    WebViewTabPool.setHostMediaCompatBypass(current.url, nextEnabled)
+    updateTab(current.id) { it.copy(isMediaCompatBypassEnabled = nextEnabled) }
+    webViewPool.findWebView(current.id)?.let { wv ->
+      wv.clearCache(true)
+      wv.reload()
+    }
+    showMessage(
+      if (nextEnabled) "Media Compatibility Bypass ON for $host"
+      else "Standard Shield restored for $host"
+    )
   }
 
   @Suppress("UNUSED_PARAMETER")
@@ -453,30 +459,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  fun openOmniMultiQuery(query: String) {
-    val trimmed = query.trim()
-    if (trimmed.isBlank()) return
-    val encoded = URLEncoder.encode(trimmed, "UTF-8")
-    val engines =
-      listOf(
-        SearchEngine.SEARXNG,
-        SearchEngine.MOJEEK,
-        SearchEngine.MARGINALIA,
-        SearchEngine.BRAVE,
-        SearchEngine.DUCKDUCKGO,
-      )
-    val urls = engines.map { it.searchUrlTemplate.replace("%s", encoded) }
-    urls.forEachIndexed { index, url ->
-      if (index == 0) {
-        navigate(url)
-      } else {
-        newTab(isIncognito = activeTab.value.isIncognito, initialUrl = url)
-      }
-    }
-    _activeSheet.value = BrowserSheet.NONE
-    showMessage("Launched parallel search across ${engines.size} independent engines")
-  }
-
   fun switchToNextTab() {
     val list = _tabs.value
     if (list.size <= 1) return
@@ -521,6 +503,19 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       val nextIndex = (index - 1).coerceIn(0, remaining.lastIndex)
       _activeTabId.value = remaining[nextIndex].id
     }
+  }
+
+  fun closeAllTabs() {
+    val currentIds = _tabs.value.map { it.id }
+    currentIds.forEach { id ->
+      webViewPool.destroyTab(id)
+      mediaSnifferCoordinator.resetTab(id)
+    }
+    val fresh = BrowserTabState(title = "Speed Dial", isSpeedDial = true)
+    _tabs.value = listOf(fresh)
+    _activeTabId.value = fresh.id
+    _activeSheet.value = BrowserSheet.NONE
+    showMessage("All tabs closed")
   }
 
   fun openSheet(sheet: BrowserSheet) {
@@ -1087,6 +1082,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     vpnCoordinator.shutdownAndWipeState()
     webViewPool.destroyAllTabs()
+    WebViewTabPool.clearMediaCompatBypassHosts()
+    MediaSniffer.clearPlaybackContexts()
     DeviceTraceCleaner.wipeWebViewTraces(app)
 
     mediaSnifferCoordinator.clearAll()

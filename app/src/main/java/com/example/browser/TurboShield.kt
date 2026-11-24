@@ -181,6 +181,26 @@ object TurboShield {
       "wunderkind.co",
     )
 
+  // Tier 4: Stealth Mode Anti-Fingerprinting & Advanced Tracker Shield
+  private val stealthDomains: HashSet<String> =
+    hashSetOf(
+      "fingerprint.com",
+      "fpjs.io",
+      "fingerprintjs.com",
+      "geo.ipify.org",
+      "maxmind.com",
+      "iperf.net",
+      "scorecardresearch.com",
+      "quantcount.com",
+      "krxd.net",
+      "bluekai.com",
+      "exelator.com",
+      "mathtag.com",
+      "demdex.net",
+      "omtrdc.net",
+      "2o7.net",
+    )
+
   private val standardPathKeywords =
     listOf(
       "/pagead/",
@@ -227,11 +247,14 @@ object TurboShield {
     val host = uri.host?.lowercase(Locale.US) ?: return false
 
     if (matchesDomainSet(host, standardDomains)) return true
-    if (blockerType == AdBlockerType.ADGUARD || blockerType == AdBlockerType.STRICT) {
+    if (blockerType == AdBlockerType.ADGUARD || blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) {
       if (matchesDomainSet(host, adGuardDomains)) return true
     }
-    if (blockerType == AdBlockerType.STRICT) {
+    if (blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) {
       if (matchesDomainSet(host, strictDomains)) return true
+    }
+    if (blockerType == AdBlockerType.STEALTH) {
+      if (matchesDomainSet(host, stealthDomains)) return true
     }
 
     val pathAndQuery =
@@ -245,12 +268,12 @@ object TurboShield {
     if (pathAndQuery.isEmpty()) return false
 
     if (standardPathKeywords.any { pathAndQuery.contains(it) }) return true
-    if ((blockerType == AdBlockerType.ADGUARD || blockerType == AdBlockerType.STRICT) &&
+    if ((blockerType == AdBlockerType.ADGUARD || blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) &&
       adGuardPathKeywords.any { pathAndQuery.contains(it) }
     ) {
       return true
     }
-    if (blockerType == AdBlockerType.STRICT &&
+    if ((blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) &&
       strictPathKeywords.any { pathAndQuery.contains(it) }
     ) {
       return true
@@ -263,14 +286,14 @@ object TurboShield {
     val baseAdGuardCss =
       "ins.adsbygoogle,[id^='google_ads_'],[id*='taboola'],[id*='outbrain'],.taboola,.outbrain,[data-ad-slot],[data-google-query-id],.ad-banner,.ad-container,.sponsored-ad,amp-ad,amp-embed,[aria-label='Advertisement']{display:none!important;visibility:hidden!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;}"
     val strictExtrasCss =
-      if (blockerType == AdBlockerType.STRICT) {
+      if (blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) {
         ".fc-consent-root,#onetrust-consent-sdk,#CybotCookiebotDialog,.qc-cmp2-container,[class*='cookie-banner'],[id*='cookie-consent'],[id*='adblock-modal']{display:none!important;}"
       } else {
         ""
       }
     val fullCss = baseAdGuardCss + strictExtrasCss
     val popupGuard =
-      if (blockerType == AdBlockerType.STRICT) {
+      if (blockerType == AdBlockerType.STRICT || blockerType == AdBlockerType.STEALTH) {
         """
         if (!window.__voltPopupGuard) {
           window.__voltPopupGuard = true;
@@ -282,6 +305,45 @@ object TurboShield {
             return origOpen ? origOpen.apply(window, arguments) : null;
           };
         }
+        """.trimIndent()
+      } else {
+        ""
+      }
+    val stealthScript =
+      if (blockerType == AdBlockerType.STEALTH) {
+        """
+        try {
+          Object.defineProperty(navigator, 'doNotTrack', { get: function() { return '1'; } });
+          Object.defineProperty(navigator, 'globalPrivacyControl', { get: function() { return true; } });
+          Object.defineProperty(navigator, 'msDoNotTrack', { get: function() { return '1'; } });
+          window.doNotTrack = '1';
+          Object.defineProperty(navigator, 'webdriver', { get: function() { return false; } });
+          Object.defineProperty(navigator, 'hardwareConcurrency', { get: function() { return 8; } });
+          Object.defineProperty(navigator, 'deviceMemory', { get: function() { return 8; } });
+          Object.defineProperty(navigator, 'languages', { get: function() { return ['en-US', 'en']; } });
+          if (navigator.sendBeacon) {
+            var origBeacon = navigator.sendBeacon;
+            navigator.sendBeacon = function(url, data) {
+              var low = String(url || '').toLowerCase();
+              if (/analytics|telemetry|track|collect|metrics|log|sentry|bugsnag/i.test(low)) {
+                return true;
+              }
+              return origBeacon.apply(window, arguments);
+            };
+          }
+          var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+          HTMLCanvasElement.prototype.toDataURL = function(type) {
+            try {
+              var ctx = this.getContext('2d');
+              if (ctx && this.width > 16 && this.height > 16) {
+                var imgData = ctx.getImageData(0, 0, 1, 1);
+                imgData.data[0] = imgData.data[0] ^ 1;
+                ctx.putImageData(imgData, 0, 0);
+              }
+            } catch (e) {}
+            return origToDataURL.apply(this, arguments);
+          };
+        } catch (e) {}
         """.trimIndent()
       } else {
         ""
@@ -298,6 +360,7 @@ object TurboShield {
           }
           existing.textContent = "$fullCss";
           $popupGuard
+          $stealthScript
         } catch(e) {}
       })();
     """.trimIndent()

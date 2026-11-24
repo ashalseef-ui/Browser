@@ -53,7 +53,7 @@ object MediaSniffer {
               "xspf" -> "application/xspf+xml"
               else -> "audio/x-mpegurl"
             }
-        ext in videoExtensions || mimeParam.startsWith("video/") -> {
+        ext in videoExtensions || mimeParam.startsWith("video/") || fullLower.contains("googlevideo.com") || fullLower.contains("videoplayback") -> {
           val resolvedExt = if (ext in videoExtensions && ext != "m4v") ext else "mp4"
           MediaKind.VIDEO to "video/$resolvedExt"
         }
@@ -84,18 +84,68 @@ object MediaSniffer {
     val resolvedUrl: String? = null,
   )
 
+  data class PlaybackHeaderContext(
+    val referer: String? = null,
+    val origin: String? = null,
+    val userAgent: String = DEFAULT_BROWSER_USER_AGENT,
+  )
+
+  private val playbackContextByUrl = java.util.concurrent.ConcurrentHashMap<String, PlaybackHeaderContext>()
+  private val playbackContextByHost = java.util.concurrent.ConcurrentHashMap<String, PlaybackHeaderContext>()
+
+  fun registerPlaybackContext(
+    mediaUrl: String,
+    sourcePageUrl: String?,
+    userAgent: String = DEFAULT_BROWSER_USER_AGENT,
+  ) {
+    val validReferer =
+      sourcePageUrl?.trim()?.takeIf {
+        it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
+      }
+    val origin =
+      validReferer?.let { ref ->
+        runCatching {
+          val u = URI(ref)
+          if (!u.scheme.isNullOrBlank() && !u.authority.isNullOrBlank()) {
+            "${u.scheme}://${u.authority}"
+          } else null
+        }.getOrNull()
+      }
+    val ctx = PlaybackHeaderContext(referer = validReferer, origin = origin, userAgent = userAgent)
+    playbackContextByUrl[mediaUrl] = ctx
+    runCatching { URI(mediaUrl).host?.lowercase(Locale.US) }.getOrNull()?.takeIf { it.isNotBlank() }?.let { host ->
+      playbackContextByHost[host] = ctx
+    }
+  }
+
+  fun getPlaybackContext(url: String): PlaybackHeaderContext? {
+    playbackContextByUrl[url]?.let { return it }
+    val host = runCatching { URI(url).host?.lowercase(Locale.US) }.getOrNull()
+    return if (!host.isNullOrBlank()) playbackContextByHost[host] else null
+  }
+
+  fun clearPlaybackContexts() {
+    playbackContextByUrl.clear()
+    playbackContextByHost.clear()
+  }
+
   fun getCookiesForUrl(url: String): String? =
     runCatching { CookieManager.getInstance().getCookie(url) }
       .getOrNull()
       ?.takeIf { it.isNotBlank() }
 
-  fun buildBrowserRequestBuilder(url: String, referer: String? = null): Request.Builder {
-    val validReferer = referer?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+  fun buildBrowserRequestBuilder(
+    url: String,
+    referer: String? = null,
+    userAgent: String = DEFAULT_BROWSER_USER_AGENT,
+  ): Request.Builder {
+    val validReferer = referer?.takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
     val builder =
       Request.Builder()
         .url(url)
-        .header("User-Agent", DEFAULT_BROWSER_USER_AGENT)
+        .header("User-Agent", userAgent)
         .header("Accept", "*/*")
+        .header("Accept-Language", "en-US,en;q=0.9")
     if (validReferer != null) {
       builder.header("Referer", validReferer)
       runCatching {
@@ -322,15 +372,54 @@ object MediaSniffer {
             }
           });
 
-          // Scan JSON-LD VideoObject & inline script/JSON blocks for direct .mp4, .webm, .m3u8, or .mpd URLs
+          // Scan JSON-LD VideoObject, YouTube ytInitialPlayerResponse & inline script/JSON blocks for video URLs
           var scannedScripts = window.__voltScannedScripts || (window.WeakSet ? new WeakSet() : null);
           window.__voltScannedScripts = scannedScripts;
-          var urlPattern = /https?:\/\/[^"'\s<>\\]+\.(?:mp4|webm|mkv|mov|m4v|m3u8|mpd)(?:\?[^"'\s<>\\]*)?/gi;
+          var urlPattern = /https?:\/\/[^"'\s<>\\]+(?:\.(?:mp4|webm|mkv|mov|m4v|m3u8|mpd)|videoplayback\?[^"'\s<>\\]+|googlevideo\.com\/videoplayback[^"'\s<>\\]*)(?:\?[^"'\s<>\\]*)?/gi;
           doc.querySelectorAll('script:not([src])').forEach(function(sc) {
             if (scannedScripts && scannedScripts.has(sc)) return;
             var txt = sc.textContent || '';
             if (scannedScripts && txt.length > 0) scannedScripts.add(sc);
-            if (txt.length > 0 && txt.length < 300000) {
+            if (txt.length > 0 && txt.length < 500000) {
+              if (txt.indexOf('ytInitialPlayerResponse') !== -1 || txt.indexOf('streamingData') !== -1) {
+                try {
+                  var jsonIdx = txt.indexOf('ytInitialPlayerResponse');
+                  if (jsonIdx !== -1) {
+                    var eqIdx = txt.indexOf('=', jsonIdx);
+                    if (eqIdx !== -1) {
+                      var sub = txt.substring(eqIdx + 1).trim();
+                      if (sub.charAt(0) === '{') {
+                        var braceCount = 0;
+                        var endIdx = 0;
+                        for (var i = 0; i < sub.length; i++) {
+                          if (sub.charAt(i) === '{') braceCount++;
+                          else if (sub.charAt(i) === '}') braceCount--;
+                          if (braceCount === 0) {
+                            endIdx = i + 1;
+                            break;
+                          }
+                        }
+                        if (endIdx > 0) {
+                          var playerResp = JSON.parse(sub.substring(0, endIdx));
+                          var sData = playerResp && playerResp.streamingData;
+                          var vTitle = (playerResp.videoDetails && playerResp.videoDetails.title) || baseTitle;
+                          var vDuration = (playerResp.videoDetails && parseInt(playerResp.videoDetails.lengthSeconds)) || 0;
+                          if (sData) {
+                            var formats = (sData.formats || []).concat(sData.adaptiveFormats || []);
+                            formats.forEach(function(f) {
+                              if (f && f.url) {
+                                addCandidate(out, seen, f.url, baseUri, vTitle, '', vDuration);
+                              }
+                            });
+                            if (sData.hlsManifestUrl) addCandidate(out, seen, sData.hlsManifestUrl, baseUri, vTitle, '', vDuration);
+                            if (sData.dashManifestUrl) addCandidate(out, seen, sData.dashManifestUrl, baseUri, vTitle, '', vDuration);
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch (e) {}
+              }
               if ((sc.type || '').indexOf('ld+json') !== -1) {
                 try {
                   var ld = JSON.parse(txt);

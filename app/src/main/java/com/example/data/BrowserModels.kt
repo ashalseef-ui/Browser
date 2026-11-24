@@ -9,7 +9,6 @@ enum class SearchEngine(
   val shortLabel: String,
   val badgeCode: String,
   val accentColorHex: Long,
-  val bangs: List<String>,
 ) {
   DUCKDUCKGO(
     displayName = "DuckDuckGo",
@@ -18,7 +17,6 @@ enum class SearchEngine(
     shortLabel = "DuckDuckGo",
     badgeCode = "DDG",
     accentColorHex = 0xFFDE5833,
-    bangs = listOf("!ddg", "!d"),
   ),
   GOOGLE(
     displayName = "Google",
@@ -27,7 +25,6 @@ enum class SearchEngine(
     shortLabel = "Google",
     badgeCode = "G",
     accentColorHex = 0xFF4285F4,
-    bangs = listOf("!g"),
   ),
   BRAVE(
     displayName = "Brave Search",
@@ -36,7 +33,6 @@ enum class SearchEngine(
     shortLabel = "Brave",
     badgeCode = "BRV",
     accentColorHex = 0xFFFB542B,
-    bangs = listOf("!b", "!br", "!brave"),
   ),
   MOJEEK(
     displayName = "Mojeek",
@@ -45,7 +41,6 @@ enum class SearchEngine(
     shortLabel = "Mojeek",
     badgeCode = "MJK",
     accentColorHex = 0xFF4CAF50,
-    bangs = listOf("!m", "!mj", "!mojeek"),
   ),
   MARGINALIA(
     displayName = "Marginalia Search",
@@ -54,7 +49,6 @@ enum class SearchEngine(
     shortLabel = "Marginalia",
     badgeCode = "MRG",
     accentColorHex = 0xFFF59E0B,
-    bangs = listOf("!mg", "!marg"),
   ),
   YANDEX(
     displayName = "Yandex",
@@ -63,7 +57,6 @@ enum class SearchEngine(
     shortLabel = "Yandex",
     badgeCode = "YDX",
     accentColorHex = 0xFFEF4444,
-    bangs = listOf("!y", "!ya"),
   ),
   KAGI(
     displayName = "Kagi",
@@ -72,7 +65,6 @@ enum class SearchEngine(
     shortLabel = "Kagi",
     badgeCode = "KGI",
     accentColorHex = 0xFFFFB300,
-    bangs = listOf("!k", "!kagi"),
   ),
   QWANT(
     displayName = "Qwant",
@@ -81,7 +73,6 @@ enum class SearchEngine(
     shortLabel = "Qwant",
     badgeCode = "QWT",
     accentColorHex = 0xFF5C6BC0,
-    bangs = listOf("!q", "!qw"),
   ),
   ECOSIA(
     displayName = "Ecosia",
@@ -90,7 +81,6 @@ enum class SearchEngine(
     shortLabel = "Ecosia",
     badgeCode = "ECO",
     accentColorHex = 0xFF2E7D32,
-    bangs = listOf("!e", "!eco"),
   ),
   SEARXNG(
     displayName = "SearXNG",
@@ -99,7 +89,6 @@ enum class SearchEngine(
     shortLabel = "SearXNG",
     badgeCode = "SXG",
     accentColorHex = 0xFF06B6D4,
-    bangs = listOf("!sx", "!searx"),
   ),
   YACY(
     displayName = "YaCy",
@@ -108,7 +97,6 @@ enum class SearchEngine(
     shortLabel = "YaCy",
     badgeCode = "YCY",
     accentColorHex = 0xFF0EA5E9,
-    bangs = listOf("!yc", "!yacy"),
   ),
   WIKIPEDIA(
     displayName = "Wikipedia",
@@ -117,22 +105,12 @@ enum class SearchEngine(
     shortLabel = "Wikipedia",
     badgeCode = "WK",
     accentColorHex = 0xFFE2E8F0,
-    bangs = listOf("!w", "!wiki"),
   );
 
   fun cycled(step: Int): SearchEngine {
     val all = entries
     val nextIdx = ((ordinal + step) % all.size + all.size) % all.size
     return all[nextIdx]
-  }
-
-  companion object {
-    fun fromBang(token: String): SearchEngine? {
-      val normalized = token.trim().lowercase().let {
-        if (it.startsWith("/")) "!${it.drop(1)}" else it
-      }
-      return entries.firstOrNull { engine -> engine.bangs.any { it == normalized } }
-    }
   }
 }
 
@@ -183,6 +161,7 @@ data class BrowserTabState(
   val bytesSavedOnPage: Long = 0L,
   val lastLoadTimeMs: Long? = null,
   val isSecure: Boolean = true,
+  val isMediaCompatBypassEnabled: Boolean = false,
   val detectedMedia: List<DetectedMediaItem> = emptyList(),
   val isScanningMedia: Boolean = false,
   val isSpeedDial: Boolean = true,
@@ -202,6 +181,7 @@ enum class AdBlockerType(
   STANDARD("Standard Shield", "STD", "Fast core ad & tracker domain blocklist"),
   ADGUARD("AdGuard Filter", "ADG", "AdGuard network rules, telemetry & cosmetic ad hiding"),
   STRICT("Strict Anti-Popup", "MAX", "AdGuard + popup traps, cookie nags & anti-adblock overlays"),
+  STEALTH("Stealth Mode", "STH", "Zero-trace stealth mode: DNT, GPC, anti-fingerprint & telemetry shield"),
 }
 
 data class BrowserSettings(

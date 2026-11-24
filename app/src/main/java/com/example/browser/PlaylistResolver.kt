@@ -748,7 +748,7 @@ object PlaylistResolver {
     val base = runCatching { URI(baseUrl) }.getOrNull()
     val urlRegex =
       Regex(
-        """((?:https?:)?//[^\s"'<>\\]+?\.(?:mp4|webm|mkv|mov|m4v|m3u8|mpd|m3u|pls|xspf|mp3|m4a)(?:\?[^\s"'<>\\]*)?)""",
+        """((?:https?:)?//[^\s"'<>\\]+(?:\.(?:mp4|webm|mkv|mov|m4v|m3u8|mpd|m3u|pls|xspf|mp3|m4a)|videoplayback\?[^"'\s<>\\]+|googlevideo\.com\/videoplayback[^"'\s<>\\]*)(?:\?[^\s"'<>\\]*)?)""",
         RegexOption.IGNORE_CASE,
       )
     val attrOrJsonRegex =

@@ -31,9 +31,24 @@ class VoltMediaService : MediaSessionService() {
         .newBuilder()
         .addInterceptor { chain ->
           val orig = chain.request()
-          val builder = orig.newBuilder().header("Accept", "*/*")
+          val reqUrl = orig.url.toString()
+          val ctx = MediaSniffer.getPlaybackContext(reqUrl)
+          val builder =
+            orig
+              .newBuilder()
+              .header("Accept", "*/*")
+              .header("Accept-Language", "en-US,en;q=0.9")
+          if (ctx?.referer != null && orig.header("Referer") == null) {
+            builder.header("Referer", ctx.referer)
+          }
+          if (ctx?.origin != null && orig.header("Origin") == null) {
+            builder.header("Origin", ctx.origin)
+          }
+          if (ctx != null && orig.header("User-Agent") == null) {
+            builder.header("User-Agent", ctx.userAgent)
+          }
           if (orig.header("Cookie") == null) {
-            MediaSniffer.getCookiesForUrl(orig.url.toString())?.let { cookie ->
+            MediaSniffer.getCookiesForUrl(reqUrl)?.let { cookie ->
               builder.header("Cookie", cookie)
             }
           }

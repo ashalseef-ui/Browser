@@ -37,6 +37,9 @@
     <string name="cd_search_engine_selector">Active search engine %1$s. Tap to choose or swipe to switch.</string>
     <string name="cd_omnibox_go">Search or go to address</string>
     <string name="cd_paste_and_go">Paste from clipboard and go</string>
+    <string name="cd_gesture_back">Swipe back gesture</string>
+    <string name="cd_gesture_forward">Swipe forward gesture</string>
+    <string name="cd_site_bypass">Toggle site shield bypass for media compatibility</string>
     <string name="exit_erase_title">Exit &amp; Erase Everything?</string>
     <string name="exit_erase_message">This closes all tabs, stops downloads, media playback, and proxy/VPN tunnels, and erases all browser caches, cookies, WebView storage, temporary files, and app data on this device.</string>
 </resources>
