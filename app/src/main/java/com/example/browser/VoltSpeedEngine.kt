@@ -151,19 +151,17 @@ class VoltSpeedEngine(private val context: Context) {
   private val defaultUserAgent: String by lazy { WebSettings.getDefaultUserAgent(context) }
 
   @SuppressLint("SetJavaScriptEnabled")
-  fun configureWebViewSettings(webView: WebView, settings: BrowserSettings) {
+  fun configureWebViewSettings(webView: WebView, settings: BrowserSettings, isIncognito: Boolean = false) {
     webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
     webView.isScrollbarFadingEnabled = true
 
     val ws = webView.settings
     ws.javaScriptEnabled = true
-    // Keep DOM storage in-memory only during active session for modern HTML5 video players,
-    // while strictly disabling disk cache, WebSQL database, and form data persistence.
     ws.domStorageEnabled = true
     ws.databaseEnabled = false
     @Suppress("DEPRECATION")
     ws.saveFormData = false
-    ws.cacheMode = WebSettings.LOAD_NO_CACHE
+    ws.cacheMode = if (isIncognito) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
     ws.useWideViewPort = true
     ws.loadWithOverviewMode = true
     ws.setSupportZoom(true)
@@ -176,9 +174,10 @@ class VoltSpeedEngine(private val context: Context) {
     ws.loadsImagesAutomatically = !settings.liteModeEnabled
     ws.blockNetworkImage = settings.liteModeEnabled
 
+    val chromeVer = Regex("Chrome/([\\d\\.]+)").find(defaultUserAgent)?.groupValues?.getOrNull(1) ?: "126.0.0.0"
     ws.userAgentString =
       if (settings.desktopModeEnabled) {
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVer Safari/537.36"
       } else {
         defaultUserAgent
       }

@@ -6,3 +6,15 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# Room Database
+-keep class * extends androidx.room.RoomDatabase { *; }
+-dontwarn androidx.room.room-compiler**
+
+# WireGuard Tunnel & JNI Go backend
+-keep class com.wireguard.** { *; }
+-dontwarn com.wireguard.**
+
+# Media3 / ExoPlayer
+-keep class androidx.media3.** { *; }
+-dontwarn androidx.media3.**

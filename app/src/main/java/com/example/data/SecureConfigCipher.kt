@@ -2,10 +2,10 @@ package com.example.data
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.Base64
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.security.SecureRandom
-import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -13,8 +13,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Encrypts sensitive WireGuard private keys & endpoint configurations at rest using an
- * AndroidKeyStore-backed 256-bit AES-GCM key. Handles unencrypted legacy strings on read
- * and falls back cleanly in JVM unit-test environments without AndroidKeyStore.
+ * AndroidKeyStore-backed 256-bit AES-GCM key. Throws on encryption failure and returns null
+ * on decryption failure instead of failing silently.
  */
 object SecureConfigCipher {
 
@@ -27,15 +27,15 @@ object SecureConfigCipher {
   fun encrypt(plaintext: String): String {
     if (plaintext.isBlank()) return ""
     if (plaintext.startsWith(PREFIX)) return plaintext
-    val key = getOrCreateKeystoreKey() ?: return plaintext
-    return runCatching { encryptWithKey(plaintext, key) }.getOrDefault(plaintext)
+    val key = getOrCreateKeystoreKey() ?: throw IllegalStateException("AndroidKeyStore unavailable or key generation failed")
+    return encryptWithKey(plaintext, key)
   }
 
-  fun decrypt(stored: String): String {
+  fun decrypt(stored: String): String? {
     if (stored.isBlank()) return ""
     if (!stored.startsWith(PREFIX)) return stored
-    val key = getOrCreateKeystoreKey() ?: return ""
-    return runCatching { decryptWithKey(stored, key) }.getOrDefault("")
+    val key = getOrCreateKeystoreKey() ?: return null
+    return runCatching { decryptWithKey(stored, key) }.getOrNull()
   }
 
   internal fun encryptWithKey(plaintext: String, key: SecretKey): String {
@@ -46,13 +46,13 @@ object SecureConfigCipher {
     val combined = ByteArray(iv.size + ciphertext.size)
     System.arraycopy(iv, 0, combined, 0, iv.size)
     System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
-    return PREFIX + Base64.getEncoder().encodeToString(combined)
+    return PREFIX + Base64.encodeToString(combined, Base64.NO_WRAP)
   }
 
   internal fun decryptWithKey(stored: String, key: SecretKey): String {
     if (!stored.startsWith(PREFIX)) return stored
-    val combined = Base64.getDecoder().decode(stored.removePrefix(PREFIX))
-    if (combined.size <= GCM_IV_BYTES) return ""
+    val combined = Base64.decode(stored.removePrefix(PREFIX), Base64.NO_WRAP)
+    require(combined.size > GCM_IV_BYTES) { "Ciphertext too short" }
     val iv = combined.copyOfRange(0, GCM_IV_BYTES)
     val ciphertext = combined.copyOfRange(GCM_IV_BYTES, combined.size)
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")

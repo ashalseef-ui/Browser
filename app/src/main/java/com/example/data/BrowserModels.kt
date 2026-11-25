@@ -181,13 +181,14 @@ enum class AdBlockerType(
   STANDARD("Standard Shield", "STD", "Fast core ad & tracker domain blocklist"),
   ADGUARD("AdGuard Filter", "ADG", "AdGuard network rules, telemetry & cosmetic ad hiding"),
   STRICT("Strict Anti-Popup", "MAX", "AdGuard + popup traps, cookie nags & anti-adblock overlays"),
-  STEALTH("Stealth Mode", "STH", "Zero-trace stealth mode: DNT, GPC, anti-fingerprint & telemetry shield"),
+  STEALTH("Stealth Mode", "STH", "Strict tracker blocking with DNT/GPC signals"),
 }
 
 data class BrowserSettings(
   val turboShieldEnabled: Boolean = true,
   val adBlockerType: AdBlockerType = AdBlockerType.ADGUARD,
   val liteModeEnabled: Boolean = false,
+  val httpsOnlyEnabled: Boolean = false,
   val darkWebEnabled: Boolean = true,
   val desktopModeEnabled: Boolean = false,
   val autoWireGuardOnLaunchEnabled: Boolean = false,

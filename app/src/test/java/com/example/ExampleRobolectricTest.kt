@@ -467,6 +467,7 @@ class ExampleRobolectricTest {
     assertTrue(com.example.vpn.WireGuardManager.hasValidWireGuardSections(warpConf))
     assertEquals("162.159.192.1:2408", com.example.vpn.WireGuardManager.parseEndpointFromConf(warpConf))
     assertTrue(warpConf.contains("Address = 172.16.0.2/32"))
+    assertTrue(warpConf.contains("AllowedIPs = 0.0.0.0/0, ::/0"))
     assertTrue(warpConf.contains("MTU = 1280"))
 
     val relays =

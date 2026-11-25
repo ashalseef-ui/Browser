@@ -207,7 +207,7 @@ class WireGuardManager(private val context: Context) {
         |
         |[Peer]
         |PublicKey = ${peerPublicKeyBase64.trim()}
-        |AllowedIPs = 0.0.0.0/0
+        |AllowedIPs = 0.0.0.0/0, ::/0
         |Endpoint = ${endpoint.trim()}
         |PersistentKeepalive = 25
       """.trimMargin()
