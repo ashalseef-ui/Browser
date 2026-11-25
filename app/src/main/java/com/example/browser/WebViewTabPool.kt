@@ -7,7 +7,10 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.HttpAuthHandler
+import android.net.http.SslError
+import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -24,7 +27,10 @@ import com.example.data.AdBlockerType
 import com.example.data.BrowserSettings
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
+import com.example.data.SitePermissionEntity
+import com.example.data.SitePermissionType
 import com.example.data.WebContextMenuTarget
+import java.io.ByteArrayInputStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +47,20 @@ interface TabWebCallbacks {
   fun onMediaDetected(tabId: String, items: List<DetectedMediaItem>)
   fun onDownloadRequested(url: String, userAgent: String, contentDisposition: String, mimeType: String)
   fun onOpenNewTabRequested(url: String)
+  fun onCreatePopupTabRequested(isIncognito: Boolean): String?
+  fun onHttpsUpgradeFailed(tabId: String, failedHttpsUrl: String, fallbackHttpUrl: String, reason: String)
+  fun onPublicProxyHttpWarning(tabId: String, httpUrl: String)
+  fun onEnsureRuntimePermissions(types: Set<SitePermissionType>, onResult: (Boolean) -> Unit)
+  fun onSitePermissionRequested(
+    tabId: String,
+    origin: String,
+    host: String,
+    isIncognito: Boolean,
+    requestedTypes: Set<SitePermissionType>,
+    onDecision: (granted: Boolean, rememberForSite: Boolean) -> Unit,
+  )
+  fun onSitePermissionCanceled(tabId: String)
+  fun onPersistSitePermission(host: String, type: SitePermissionType, granted: Boolean)
   fun onShowFullscreenView(view: View, callback: WebChromeClient.CustomViewCallback)
   fun onHideFullscreenView()
   fun onMainFrameNetworkError(tabId: String, errorCode: Int, description: String)
@@ -66,10 +86,17 @@ class WebViewTabPool(
   private val currentUrls = HashMap<String, String>()
   private val currentTitles = HashMap<String, String>()
   private val lastDomTouchTargets = ConcurrentHashMap<String, Pair<Long, WebContextMenuTarget>>()
+  private val upgradedFromHttpTabs = ConcurrentHashMap<String, Pair<String, String>>()
+  private val httpsOnlyBypassedHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+  private val publicProxyHttpBypassHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+  private val persistedSitePermissions = ConcurrentHashMap<String, Boolean>()
+  private val sessionSitePermissions = ConcurrentHashMap<String, Boolean>()
 
   @Volatile var currentSettings: BrowserSettings = BrowserSettings()
+  @Volatile var isKillSwitchBlocking: Boolean = false
   var proxyAuthTargetProvider: (() -> VoltSpeedEngine.ProxyAuthTarget?)? = null
   var proxyCredentialsProvider: (() -> Pair<String, String>?)? = null
+  var isPublicRelayActiveProvider: (() -> Boolean)? = null
 
   private fun BrowserSettings.toAppliedWebSettings(): AppliedWebSettings =
     AppliedWebSettings(
@@ -77,6 +104,49 @@ class WebViewTabPool(
       darkWebEnabled = darkWebEnabled,
       desktopModeEnabled = desktopModeEnabled,
     )
+
+  fun syncPersistedSitePermissions(entities: List<SitePermissionEntity>) {
+    persistedSitePermissions.clear()
+    entities.forEach { entity ->
+      persistedSitePermissions["${entity.host}|${entity.permissionType}"] = entity.granted
+    }
+  }
+
+  fun allowInsecureHttpHost(host: String) {
+    val clean = normalizeHostKey(host)
+    if (clean.isNotEmpty()) {
+      httpsOnlyBypassedHosts.add(clean)
+      publicProxyHttpBypassHosts.add(clean)
+    }
+  }
+
+  fun stopAllLoads() {
+    mainScope.launch(Dispatchers.Main) {
+      webViews.values.forEach { wv -> runCatching { wv.stopLoading() } }
+    }
+  }
+
+  sealed interface OutgoingNavigationDecision {
+    data class LoadUrl(val url: String) : OutgoingNavigationDecision
+    data class WarnPublicProxyHttp(val httpUrl: String) : OutgoingNavigationDecision
+    data object BlockedByKillSwitch : OutgoingNavigationDecision
+  }
+
+  fun resolveOutgoingNavigation(tabId: String, rawUrl: String): OutgoingNavigationDecision {
+    if (isKillSwitchBlocking) return OutgoingNavigationDecision.BlockedByKillSwitch
+    if (rawUrl.startsWith("http://", ignoreCase = true)) {
+      val host = normalizeHostKey(rawUrl)
+      if (currentSettings.httpsOnlyEnabled && host.isNotEmpty() && !httpsOnlyBypassedHosts.contains(host)) {
+        val upgraded = upgradeHttpToHttps(rawUrl)
+        upgradedFromHttpTabs[tabId] = rawUrl to upgraded
+        return OutgoingNavigationDecision.LoadUrl(upgraded)
+      }
+      if (isPublicRelayActiveProvider?.invoke() == true && host.isNotEmpty() && !publicProxyHttpBypassHosts.contains(host)) {
+        return OutgoingNavigationDecision.WarnPublicProxyHttp(rawUrl)
+      }
+    }
+    return OutgoingNavigationDecision.LoadUrl(rawUrl)
+  }
 
   fun getOrCreateWebView(
     tabId: String,
@@ -87,7 +157,7 @@ class WebViewTabPool(
     webViews[tabId]?.let { existing ->
       val target = currentSettings.toAppliedWebSettings()
       if (appliedWebSettings[tabId] != target) {
-        speedEngine.configureWebViewSettings(existing, currentSettings)
+        speedEngine.configureWebViewSettings(existing, currentSettings, isIncognito = isIncognito)
         appliedWebSettings[tabId] = target
       }
       return existing
@@ -123,7 +193,7 @@ class WebViewTabPool(
       CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
     }
 
-    speedEngine.configureWebViewSettings(webView, currentSettings)
+    speedEngine.configureWebViewSettings(webView, currentSettings, isIncognito = isIncognito)
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
       webView.importantForAutofill =
         if (isIncognito) View.IMPORTANT_FOR_AUTOFILL_NO
@@ -163,31 +233,92 @@ class WebViewTabPool(
               )
         },
       )
-    webView.addJavascriptInterface(jsBridge, "VoltMediaBridge")
+
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      // Media sniffer & touch context must operate on arbitrary user-visited websites
+      WebViewCompat.addWebMessageListener(
+        webView,
+        "VoltMediaChannel",
+        setOf("*"),
+      ) { _, message, _, _, _ ->
+        val payload = message.data ?: return@addWebMessageListener
+        jsBridge.handleWebMessage(payload)
+      }
+    } else {
+      webView.addJavascriptInterface(jsBridge, "VoltMediaBridge")
+    }
 
     webView.webViewClient =
       object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-          val url = request?.url?.toString() ?: return false
-          return !(url.startsWith("http://") || url.startsWith("https://") || url.startsWith("about:"))
+          val uri = request?.url ?: return false
+          val url = uri.toString()
+          if (isKillSwitchBlocking) return true
+          if (!(url.startsWith("http://") || url.startsWith("https://") || url.startsWith("about:"))) {
+            return true
+          }
+          val isMainFrame = request.isForMainFrame
+          if (isMainFrame) {
+            val currentHost = currentUrls[tabId].orEmpty()
+            if (!isHostMediaCompatBypassed(currentHost) &&
+              currentSettings.adBlockerType == AdBlockerType.STRICT &&
+              TurboShield.shouldBlock(uri, AdBlockerType.STRICT)
+            ) {
+              mainScope.launch(Dispatchers.Main) {
+                callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
+              }
+              return true
+            }
+            if (url.startsWith("http://", ignoreCase = true)) {
+              val host = normalizeHostKey(url)
+              if (currentSettings.httpsOnlyEnabled && host.isNotEmpty() && !httpsOnlyBypassedHosts.contains(host)) {
+                val upgraded = upgradeHttpToHttps(url)
+                upgradedFromHttpTabs[tabId] = url to upgraded
+                view?.loadUrl(upgraded)
+                return true
+              }
+              if (isPublicRelayActiveProvider?.invoke() == true &&
+                host.isNotEmpty() &&
+                !publicProxyHttpBypassHosts.contains(host)
+              ) {
+                mainScope.launch(Dispatchers.Main) {
+                  callbacks.onPublicProxyHttpWarning(tabId, url)
+                }
+                return true
+              }
+            }
+          }
+          return false
         }
 
         override fun shouldInterceptRequest(
           view: WebView?,
           request: WebResourceRequest?,
         ): WebResourceResponse? {
+          if (isKillSwitchBlocking) {
+            return WebResourceResponse(
+              "text/plain",
+              "utf-8",
+              503,
+              "Blocked by VPN Kill Switch",
+              mapOf("Cache-Control" to "no-store"),
+              ByteArrayInputStream(ByteArray(0)),
+            )
+          }
           val uri = request?.url ?: return null
           val isMainFrame = request.isForMainFrame
           val pageUrl = currentUrls[tabId].orEmpty()
           val isSiteBypassed = isHostMediaCompatBypassed(pageUrl)
+          val headers = request.requestHeaders.orEmpty()
 
           if (!isMainFrame && !isSiteBypassed && currentSettings.liteModeEnabled) {
-            val (shouldBlockData, savedBytes) = VoltDataSaver.shouldBlockForDataSaver(uri)
+            val (shouldBlockData, savedBytes) = VoltDataSaver.shouldBlockForDataSaver(uri, headers)
             if (shouldBlockData) {
+              val isImage = savedBytes == VoltDataSaver.ESTIMATED_IMAGE_BYTES
               mainScope.launch(Dispatchers.Main) {
                 callbacks.onTrackerBlocked(tabId, savedBytes)
               }
-              return VoltDataSaver.emptySaverResponse()
+              return VoltDataSaver.emptySaverResponse(isImage = isImage)
             }
           }
 
@@ -204,7 +335,6 @@ class WebViewTabPool(
 
           val urlString = uri.toString()
           val pageTitle = currentTitles[tabId].orEmpty()
-          val headers = request.requestHeaders.orEmpty()
           val requestReferer =
             headers.entries.firstOrNull { it.key.equals("Referer", ignoreCase = true) }?.value
               ?: pageUrl
@@ -244,6 +374,12 @@ class WebViewTabPool(
           }
           view?.evaluateJavascript(MediaSniffer.domSnifferScript, null)
 
+          if (resolvedUrl.startsWith("https://", ignoreCase = true)) {
+            val pending = upgradedFromHttpTabs[tabId]
+            if (pending != null && normalizeHostKey(pending.second) != normalizeHostKey(resolvedUrl)) {
+              upgradedFromHttpTabs.remove(tabId)
+            }
+          }
           callbacks.onPageFinished(
             tabId = tabId,
             url = resolvedUrl,
@@ -261,11 +397,50 @@ class WebViewTabPool(
         ) {
           super.onReceivedError(view, request, error)
           if (request?.isForMainFrame == true && error != null) {
+            val failedUrl = request.url?.toString().orEmpty()
+            val pendingUpgrade = upgradedFromHttpTabs[tabId]
+            if (pendingUpgrade != null &&
+              normalizeHostKey(pendingUpgrade.second) == normalizeHostKey(failedUrl)
+            ) {
+              upgradedFromHttpTabs.remove(tabId)
+              val reason = error.description?.toString().orEmpty().ifBlank { "HTTPS connection failed" }
+              mainScope.launch(Dispatchers.Main) {
+                callbacks.onHttpsUpgradeFailed(
+                  tabId = tabId,
+                  failedHttpsUrl = failedUrl,
+                  fallbackHttpUrl = pendingUpgrade.first,
+                  reason = reason,
+                )
+              }
+            }
             callbacks.onMainFrameNetworkError(
               tabId = tabId,
               errorCode = error.errorCode,
               description = error.description?.toString().orEmpty(),
             )
+          }
+        }
+
+        override fun onReceivedSslError(
+          view: WebView?,
+          handler: SslErrorHandler?,
+          error: SslError?,
+        ) {
+          handler?.cancel()
+          val failedUrl = error?.url.orEmpty()
+          val pendingUpgrade = upgradedFromHttpTabs[tabId]
+          if (pendingUpgrade != null &&
+            (failedUrl.isBlank() || normalizeHostKey(pendingUpgrade.second) == normalizeHostKey(failedUrl))
+          ) {
+            upgradedFromHttpTabs.remove(tabId)
+            mainScope.launch(Dispatchers.Main) {
+              callbacks.onHttpsUpgradeFailed(
+                tabId = tabId,
+                failedHttpsUrl = pendingUpgrade.second,
+                fallbackHttpUrl = pendingUpgrade.first,
+                reason = "TLS/SSL certificate validation failed",
+              )
+            }
           }
         }
 
@@ -309,14 +484,145 @@ class WebViewTabPool(
 
         override fun onPermissionRequest(request: PermissionRequest?) {
           request ?: return
-          val pageUrl = currentUrls[tabId].orEmpty()
-          val canGrantProtectedMedia =
-            isHostMediaCompatBypassed(pageUrl) &&
-              request.resources.contains(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)
-          if (canGrantProtectedMedia) {
-            request.grant(arrayOf(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID))
-          } else {
+          val originUrl = request.origin?.toString().orEmpty().ifBlank { currentUrls[tabId].orEmpty() }
+          val host = normalizeHostKey(originUrl).ifBlank { normalizeHostKey(currentUrls[tabId]) }
+          val requestedResources = request.resources.orEmpty()
+
+          val grantableProtected =
+            if (isHostMediaCompatBypassed(originUrl) &&
+              requestedResources.contains(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)
+            ) {
+              listOf(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)
+            } else {
+              emptyList()
+            }
+
+          val siteTypes = linkedSetOf<SitePermissionType>()
+          val mappedResources = mutableListOf<String>()
+          if (requestedResources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+            siteTypes.add(SitePermissionType.CAMERA)
+            mappedResources.add(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+          }
+          if (requestedResources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
+            siteTypes.add(SitePermissionType.MICROPHONE)
+            mappedResources.add(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+          }
+
+          if (siteTypes.isEmpty()) {
+            if (grantableProtected.isNotEmpty()) {
+              request.grant(grantableProtected.toTypedArray())
+            } else {
+              request.deny()
+            }
+            return
+          }
+
+          val tabIncognito = isIncognito || tabId in incognitoTabIds
+          val decisions = siteTypes.map { type -> type to lookupPermissionDecision(tabId, host, type, tabIncognito) }
+          if (decisions.any { it.second == false }) {
             request.deny()
+            return
+          }
+          if (decisions.all { it.second == true }) {
+            callbacks.onEnsureRuntimePermissions(siteTypes) { osGranted ->
+              if (osGranted) {
+                request.grant((mappedResources + grantableProtected).distinct().toTypedArray())
+              } else {
+                request.deny()
+              }
+            }
+            return
+          }
+
+          callbacks.onSitePermissionRequested(
+            tabId = tabId,
+            origin = originUrl,
+            host = host.ifBlank { "this site" },
+            isIncognito = tabIncognito,
+            requestedTypes = siteTypes,
+          ) { granted, rememberForSite ->
+            if (!granted) {
+              if (rememberForSite && host.isNotBlank()) {
+                recordPermissionDecision(tabId, host, siteTypes, granted = false, isIncognito = tabIncognito, callbacks = callbacks)
+              }
+              request.deny()
+            } else {
+              callbacks.onEnsureRuntimePermissions(siteTypes) { osGranted ->
+                if (osGranted) {
+                  if (rememberForSite && host.isNotBlank()) {
+                    recordPermissionDecision(tabId, host, siteTypes, granted = true, isIncognito = tabIncognito, callbacks = callbacks)
+                  }
+                  request.grant((mappedResources + grantableProtected).distinct().toTypedArray())
+                } else {
+                  request.deny()
+                }
+              }
+            }
+          }
+        }
+
+        override fun onPermissionRequestCanceled(request: PermissionRequest?) {
+          super.onPermissionRequestCanceled(request)
+          callbacks.onSitePermissionCanceled(tabId)
+        }
+
+        override fun onGeolocationPermissionsShowPrompt(
+          origin: String?,
+          callback: GeolocationPermissions.Callback?,
+        ) {
+          callback ?: return
+          val rawOrigin = origin.orEmpty().ifBlank { currentUrls[tabId].orEmpty() }
+          val host = normalizeHostKey(rawOrigin).ifBlank { normalizeHostKey(currentUrls[tabId]) }
+          if (host.isBlank()) {
+            callback.invoke(origin, false, false)
+            return
+          }
+          val tabIncognito = isIncognito || tabId in incognitoTabIds
+          val existing = lookupPermissionDecision(tabId, host, SitePermissionType.LOCATION, tabIncognito)
+          if (existing == false) {
+            callback.invoke(origin, false, false)
+            return
+          }
+          if (existing == true) {
+            callbacks.onEnsureRuntimePermissions(setOf(SitePermissionType.LOCATION)) { osGranted ->
+              callback.invoke(origin, osGranted, false)
+            }
+            return
+          }
+          callbacks.onSitePermissionRequested(
+            tabId = tabId,
+            origin = rawOrigin,
+            host = host,
+            isIncognito = tabIncognito,
+            requestedTypes = setOf(SitePermissionType.LOCATION),
+          ) { granted, rememberForSite ->
+            if (!granted) {
+              if (rememberForSite) {
+                recordPermissionDecision(
+                  tabId = tabId,
+                  host = host,
+                  types = setOf(SitePermissionType.LOCATION),
+                  granted = false,
+                  isIncognito = tabIncognito,
+                  callbacks = callbacks,
+                )
+              }
+              callback.invoke(origin, false, false)
+            } else {
+              callbacks.onEnsureRuntimePermissions(setOf(SitePermissionType.LOCATION)) { osGranted ->
+                if (osGranted && rememberForSite) {
+                  recordPermissionDecision(
+                    tabId = tabId,
+                    host = host,
+                    types = setOf(SitePermissionType.LOCATION),
+                    granted = true,
+                    isIncognito = tabIncognito,
+                    callbacks = callbacks,
+                  )
+                }
+                callback.invoke(origin, osGranted, false)
+              }
+            }
           }
         }
 
@@ -326,23 +632,34 @@ class WebViewTabPool(
           isUserGesture: Boolean,
           resultMsg: android.os.Message?,
         ): Boolean {
-          val hitResult = view?.hitTestResult
-          val url = hitResult?.extra
-          if (!url.isNullOrBlank() && (url.startsWith("http://") || url.startsWith("https://"))) {
+          if (isKillSwitchBlocking || !isUserGesture) {
+            return false
+          }
+          val hitUrl = view?.hitTestResult?.extra
+          if (!hitUrl.isNullOrBlank() && (hitUrl.startsWith("http://") || hitUrl.startsWith("https://"))) {
             val pageUrl = currentUrls[tabId].orEmpty()
             if (!isHostMediaCompatBypassed(pageUrl) &&
               currentSettings.adBlockerType == AdBlockerType.STRICT &&
-              TurboShield.shouldBlock(Uri.parse(url), AdBlockerType.STRICT)
+              TurboShield.shouldBlock(Uri.parse(hitUrl), AdBlockerType.STRICT)
             ) {
               mainScope.launch(Dispatchers.Main) {
                 callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
               }
               return false
             }
-            callbacks.onOpenNewTabRequested(url)
-            return true
           }
-          return false
+          val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+          val popupIncognito = isIncognito || tabId in incognitoTabIds
+          val newTabId = callbacks.onCreatePopupTabRequested(isIncognito = popupIncognito) ?: return false
+          val popupWebView =
+            getOrCreateWebView(
+              tabId = newTabId,
+              isIncognito = popupIncognito,
+              callbacks = callbacks,
+            )
+          transport.webView = popupWebView
+          resultMsg.sendToTarget()
+          return true
         }
       }
 
@@ -357,8 +674,15 @@ class WebViewTabPool(
                 if (blob.size > maxBytes) { return; }
                 var reader = new FileReader();
                 reader.onloadend = function() {
-                  if (reader.result && window.VoltMediaBridge && window.VoltMediaBridge.onBlobDownloadData) {
-                    window.VoltMediaBridge.onBlobDownloadData(reader.result, dispName, blob.type || mime);
+                  if (!reader.result) return;
+                  var resolvedMime = blob.type || mime || '';
+                  if (window.VoltMediaChannel && typeof window.VoltMediaChannel.postMessage === 'function') {
+                    window.VoltMediaChannel.postMessage(JSON.stringify({
+                      type: 'blobDownload',
+                      payload: { dataUrl: reader.result, suggestedName: dispName, mimeType: resolvedMime }
+                    }));
+                  } else if (window.VoltMediaBridge && window.VoltMediaBridge.onBlobDownloadData) {
+                    window.VoltMediaBridge.onBlobDownloadData(reader.result, dispName, resolvedMime);
                   }
                 };
                 reader.readAsDataURL(blob);
@@ -415,6 +739,8 @@ class WebViewTabPool(
     return webView
   }
 
+  @OptIn(WebViewCompat.ExperimentalSaveState::class)
+  @androidx.annotation.OptIn(markerClass = [WebViewCompat.ExperimentalSaveState::class])
   private fun evictEldestWebView(excludingTabId: String) {
     val eldestEntry = webViews.entries.firstOrNull { it.key != excludingTabId } ?: return
     val evictId = eldestEntry.key
@@ -462,8 +788,43 @@ class WebViewTabPool(
     val target = settings.toAppliedWebSettings()
     webViews.forEach { (tabId, wv) ->
       if (appliedWebSettings[tabId] != target) {
-        speedEngine.configureWebViewSettings(wv, settings)
+        speedEngine.configureWebViewSettings(
+          wv,
+          settings,
+          isIncognito = tabId in incognitoTabIds,
+        )
         appliedWebSettings[tabId] = target
+      }
+    }
+  }
+
+  private fun lookupPermissionDecision(
+    tabId: String,
+    host: String,
+    type: SitePermissionType,
+    isIncognito: Boolean,
+  ): Boolean? {
+    if (host.isBlank()) return null
+    val sessionKey = "$tabId|$host|${type.name}"
+    sessionSitePermissions[sessionKey]?.let { return it }
+    if (isIncognito) return null
+    return persistedSitePermissions["$host|${type.name}"]
+  }
+
+  private fun recordPermissionDecision(
+    tabId: String,
+    host: String,
+    types: Set<SitePermissionType>,
+    granted: Boolean,
+    isIncognito: Boolean,
+    callbacks: TabWebCallbacks,
+  ) {
+    types.forEach { type ->
+      if (isIncognito) {
+        sessionSitePermissions["$tabId|$host|${type.name}"] = granted
+      } else {
+        persistedSitePermissions["$host|${type.name}"] = granted
+        callbacks.onPersistSitePermission(host, type, granted)
       }
     }
   }
@@ -483,6 +844,10 @@ class WebViewTabPool(
   fun wipeAllCacheAndCookies() {
     savedStateBundles.clear()
     mediaCompatBypassHosts.clear()
+    httpsOnlyBypassedHosts.clear()
+    publicProxyHttpBypassHosts.clear()
+    sessionSitePermissions.clear()
+    upgradedFromHttpTabs.clear()
     webViews.values.forEach { speedEngine.wipeEphemeralCacheAndStorage(it, wipeGlobalProfileStorage = false) }
     wipePrivateProfileStorage()
     speedEngine.wipeEphemeralCacheAndStorage(null, wipeGlobalProfileStorage = true)
@@ -506,6 +871,8 @@ class WebViewTabPool(
     currentUrls.remove(tabId)
     currentTitles.remove(tabId)
     lastDomTouchTargets.remove(tabId)
+    upgradedFromHttpTabs.remove(tabId)
+    sessionSitePermissions.keys.removeAll { it.startsWith("$tabId|") }
   }
 
   fun destroyAllTabs() {
@@ -578,6 +945,13 @@ class WebViewTabPool(
       if (key.isEmpty()) return false
       return mediaCompatBypassHosts.contains(key)
     }
+
+    fun upgradeHttpToHttps(url: String): String =
+      if (url.startsWith("http://", ignoreCase = true)) {
+        "https://" + url.substring(7)
+      } else {
+        url
+      }
 
     fun clearMediaCompatBypassHosts() {
       mediaCompatBypassHosts.clear()

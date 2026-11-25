@@ -434,6 +434,20 @@ class PublicRelayManager {
     }
   }
 
+  fun applyKillSwitchDeadProxy(onApplied: (Boolean) -> Unit = {}) {
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+      onApplied(false)
+      return
+    }
+    val config =
+      ProxyConfig.Builder()
+        .addProxyRule("http://127.0.0.1:9")
+        .build()
+    ProxyController.getInstance().setProxyOverride(config, proxyExecutor) {
+      onApplied(true)
+    }
+  }
+
   companion object {
     val PREFERRED_COUNTRY_CODES = setOf("DE", "IN")
 

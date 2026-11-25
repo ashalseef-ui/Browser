@@ -36,3 +36,14 @@ data class DownloadItemEntity(
   val status: String = DownloadStatus.QUEUED.name,
   val createdAt: Long = System.currentTimeMillis(),
 )
+
+@Entity(
+  tableName = "site_permissions",
+  primaryKeys = ["host", "permissionType"],
+)
+data class SitePermissionEntity(
+  val host: String,
+  val permissionType: String,
+  val granted: Boolean,
+  val updatedAt: Long = System.currentTimeMillis(),
+)

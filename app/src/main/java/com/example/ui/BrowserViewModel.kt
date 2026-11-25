@@ -1,12 +1,15 @@
 package com.example.ui
 
+import android.Manifest
 import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,8 +27,10 @@ import com.example.data.BrowserSettings
 import com.example.data.BrowserTabState
 import com.example.data.DetectedMediaItem
 import com.example.data.DownloadItemEntity
+import com.example.data.HttpsWarningState
 import com.example.data.MediaKind
 import com.example.data.SearchEngine
+import com.example.data.SitePermissionType
 import com.example.data.SocialAppShortcut
 import com.example.data.WebContextMenuTarget
 import com.example.media.MediaDownloader
@@ -65,6 +70,20 @@ enum class BrowserSheet {
   VPN,
   EXIT_CONFIRM,
 }
+
+data class SitePermissionPromptState(
+  val tabId: String,
+  val origin: String,
+  val host: String,
+  val isIncognito: Boolean,
+  val requestedTypes: Set<SitePermissionType>,
+  val onDecision: (granted: Boolean, rememberForSite: Boolean) -> Unit,
+)
+
+data class RuntimePermissionRequestState(
+  val permissions: List<String>,
+  val onResult: (Boolean) -> Unit,
+)
 
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -135,6 +154,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   private val _toastMessage = MutableStateFlow<String?>(null)
   val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
+  private val _pendingSitePermissionPrompt = MutableStateFlow<SitePermissionPromptState?>(null)
+  val pendingSitePermissionPrompt: StateFlow<SitePermissionPromptState?> =
+    _pendingSitePermissionPrompt.asStateFlow()
+
+  private val _pendingRuntimePermissionRequest =
+    MutableStateFlow<RuntimePermissionRequestState?>(null)
+  val pendingRuntimePermissionRequest: StateFlow<RuntimePermissionRequestState?> =
+    _pendingRuntimePermissionRequest.asStateFlow()
+
   val mediaPlayerState: StateFlow<MediaPlayerUiState> = mediaManager.uiState
 
   private val vpnCoordinator =
@@ -146,6 +174,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       settingsFlow = settings,
       activeTabProvider = { activeTab.value },
       onReloadActiveTab = { webViewPool.findWebView(activeTab.value.id)?.reload() },
+      onStopAllWebViewLoads = { webViewPool.stopAllLoads() },
+      onKillSwitchBlockingChanged = { blocked -> webViewPool.isKillSwitchBlocking = blocked },
       onShowMessage = ::showMessage,
     )
   val vpnState: StateFlow<VpnTunnelState> = vpnCoordinator.vpnState
@@ -188,6 +218,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             bytesSavedOnPage = 0L,
             detectedMedia = emptyList(),
             isScanningMedia = false,
+            httpsWarning = null,
           )
         }
       }
@@ -267,6 +298,137 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         newTab(isIncognito = activeTab.value.isIncognito, initialUrl = url)
       }
 
+      override fun onCreatePopupTabRequested(isIncognito: Boolean): String? {
+        val popupTab =
+          BrowserTabState(
+            url = "",
+            title = if (isIncognito) "Private Tab" else "New Tab",
+            isIncognito = isIncognito,
+            isSpeedDial = false,
+            isLoading = true,
+            progress = 10,
+          )
+        _tabs.update { it + popupTab }
+        _activeTabId.value = popupTab.id
+        _activeSheet.value = BrowserSheet.NONE
+        return popupTab.id
+      }
+
+      override fun onHttpsUpgradeFailed(
+        tabId: String,
+        failedHttpsUrl: String,
+        fallbackHttpUrl: String,
+        reason: String,
+      ) {
+        updateTab(tabId) {
+          it.copy(
+            isLoading = false,
+            progress = 0,
+            isSpeedDial = false,
+            httpsWarning =
+              HttpsWarningState(
+                failedUrl = failedHttpsUrl,
+                fallbackHttpUrl = fallbackHttpUrl,
+                reason = reason,
+                isPublicProxyWarning = false,
+              ),
+          )
+        }
+      }
+
+      override fun onPublicProxyHttpWarning(tabId: String, httpUrl: String) {
+        updateTab(tabId) {
+          it.copy(
+            url = httpUrl,
+            isLoading = false,
+            progress = 0,
+            isSpeedDial = false,
+            isSecure = false,
+            httpsWarning =
+              HttpsWarningState(
+                failedUrl = WebViewTabPool.upgradeHttpToHttps(httpUrl),
+                fallbackHttpUrl = httpUrl,
+                reason =
+                  "Plain HTTP traffic over a free public proxy can be read or modified by the relay operator.",
+                isPublicProxyWarning = true,
+              ),
+          )
+        }
+      }
+
+      override fun onEnsureRuntimePermissions(
+        types: Set<SitePermissionType>,
+        onResult: (Boolean) -> Unit,
+      ) {
+        viewModelScope.launch(Dispatchers.Main) {
+          val missing = mutableListOf<String>()
+          if (types.contains(SitePermissionType.CAMERA) &&
+            ContextCompat.checkSelfPermission(app, Manifest.permission.CAMERA) !=
+              PackageManager.PERMISSION_GRANTED
+          ) {
+            missing.add(Manifest.permission.CAMERA)
+          }
+          if (types.contains(SitePermissionType.MICROPHONE) &&
+            ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) !=
+              PackageManager.PERMISSION_GRANTED
+          ) {
+            missing.add(Manifest.permission.RECORD_AUDIO)
+          }
+          if (types.contains(SitePermissionType.LOCATION)) {
+            val hasFine =
+              ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+            val hasCoarse =
+              ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+            if (!hasFine && !hasCoarse) {
+              missing.add(Manifest.permission.ACCESS_FINE_LOCATION)
+              missing.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+          }
+          if (missing.isEmpty()) {
+            onResult(true)
+          } else {
+            _pendingRuntimePermissionRequest.value?.onResult?.invoke(false)
+            _pendingRuntimePermissionRequest.value = RuntimePermissionRequestState(missing, onResult)
+          }
+        }
+      }
+
+      override fun onSitePermissionRequested(
+        tabId: String,
+        origin: String,
+        host: String,
+        isIncognito: Boolean,
+        requestedTypes: Set<SitePermissionType>,
+        onDecision: (granted: Boolean, rememberForSite: Boolean) -> Unit,
+      ) {
+        viewModelScope.launch(Dispatchers.Main) {
+          _pendingSitePermissionPrompt.value?.onDecision?.invoke(false, false)
+          _pendingSitePermissionPrompt.value =
+            SitePermissionPromptState(
+              tabId = tabId,
+              origin = origin,
+              host = host,
+              isIncognito = isIncognito,
+              requestedTypes = requestedTypes,
+              onDecision = onDecision,
+            )
+        }
+      }
+
+      override fun onSitePermissionCanceled(tabId: String) {
+        viewModelScope.launch(Dispatchers.Main) {
+          if (_pendingSitePermissionPrompt.value?.tabId == tabId) {
+            _pendingSitePermissionPrompt.value = null
+          }
+        }
+      }
+
+      override fun onPersistSitePermission(host: String, type: SitePermissionType, granted: Boolean) {
+        viewModelScope.launch { repository.saveSitePermission(host, type, granted) }
+      }
+
       override fun onShowFullscreenView(view: View, callback: WebChromeClient.CustomViewCallback) {
         _fullscreenCustomView.value = view to callback
       }
@@ -297,6 +459,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   init {
     webViewPool.proxyAuthTargetProvider = { speedEngine.getActiveProxyAuthTarget() }
     webViewPool.proxyCredentialsProvider = { speedEngine.getActiveProxyCredentials() }
+    webViewPool.isPublicRelayActiveProvider = { vpnState.value.activeRelay?.isPublicFreeRelay == true }
     refreshSocialAppStates()
     val baselineUidBytes = readAppUidTotalBytes()
     viewModelScope.launch {
@@ -331,6 +494,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         vpnCoordinator.syncSavedConfigs(currentSettings)
       }
     }
+    viewModelScope.launch {
+      repository.sitePermissions.collect { entities ->
+        webViewPool.syncPersistedSitePermissions(entities)
+      }
+    }
     mediaManager.connect()
   }
 
@@ -339,21 +507,36 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     if (trimmed.isEmpty()) return
     val engine = overrideEngine ?: settings.value.searchEngine
     val targetUrl = VoltSpeedEngine.normalizeInputToUrl(trimmed, engine) ?: return
-    speedEngine.prewarmOrigin(targetUrl)
-
     val current = activeTab.value
-    updateTab(current.id) {
-      it.copy(
-        url = targetUrl,
-        isSpeedDial = false,
-        isLoading = true,
-        progress = 5,
-        isMediaCompatBypassEnabled = WebViewTabPool.isHostMediaCompatBypassed(targetUrl),
-      )
+    when (val decision = webViewPool.resolveOutgoingNavigation(current.id, targetUrl)) {
+      WebViewTabPool.OutgoingNavigationDecision.BlockedByKillSwitch -> {
+        updateTab(current.id) { it.copy(isLoading = false, progress = 0) }
+        showMessage("Blocked by VPN Kill Switch — reconnect WireGuard or turn off Kill Switch")
+        _activeSheet.value = BrowserSheet.NONE
+      }
+      is WebViewTabPool.OutgoingNavigationDecision.WarnPublicProxyHttp -> {
+        tabWebCallbacks.onPublicProxyHttpWarning(current.id, decision.httpUrl)
+        _activeSheet.value = BrowserSheet.NONE
+      }
+      is WebViewTabPool.OutgoingNavigationDecision.LoadUrl -> {
+        val resolvedUrl = decision.url
+        speedEngine.prewarmOrigin(resolvedUrl)
+        updateTab(current.id) {
+          it.copy(
+            url = resolvedUrl,
+            isSpeedDial = false,
+            isLoading = true,
+            progress = 5,
+            isSecure = resolvedUrl.startsWith("https://", ignoreCase = true),
+            isMediaCompatBypassEnabled = WebViewTabPool.isHostMediaCompatBypassed(resolvedUrl),
+            httpsWarning = null,
+          )
+        }
+        val wv = webViewPool.getOrCreateWebView(current.id, current.isIncognito, tabWebCallbacks)
+        wv.loadUrl(resolvedUrl)
+        _activeSheet.value = BrowserSheet.NONE
+      }
     }
-    val wv = webViewPool.getOrCreateWebView(current.id, current.isIncognito, tabWebCallbacks)
-    wv.loadUrl(targetUrl)
-    _activeSheet.value = BrowserSheet.NONE
   }
 
   fun hardReloadActiveTab() {
@@ -436,7 +619,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun newTab(isIncognito: Boolean = false, initialUrl: String = "") {
-    val resolvedUrl =
+    val resolvedInputUrl =
       if (initialUrl.isNotBlank()) {
         VoltSpeedEngine.normalizeInputToUrl(initialUrl, settings.value.searchEngine).orEmpty()
       } else {
@@ -444,18 +627,37 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       }
     val newTab =
       BrowserTabState(
-        url = resolvedUrl,
-        title = if (resolvedUrl.isBlank()) (if (isIncognito) "Private Dial" else "Speed Dial") else resolvedUrl,
+        url = resolvedInputUrl,
+        title = if (resolvedInputUrl.isBlank()) (if (isIncognito) "Private Dial" else "Speed Dial") else resolvedInputUrl,
         isIncognito = isIncognito,
-        isSpeedDial = resolvedUrl.isBlank(),
+        isSpeedDial = resolvedInputUrl.isBlank(),
       )
     _tabs.update { it + newTab }
     _activeTabId.value = newTab.id
     _activeSheet.value = BrowserSheet.NONE
-    if (resolvedUrl.isNotBlank()) {
-      speedEngine.prewarmOrigin(resolvedUrl)
-      val wv = webViewPool.getOrCreateWebView(newTab.id, isIncognito, tabWebCallbacks)
-      wv.loadUrl(resolvedUrl)
+    if (resolvedInputUrl.isNotBlank()) {
+      when (val decision = webViewPool.resolveOutgoingNavigation(newTab.id, resolvedInputUrl)) {
+        WebViewTabPool.OutgoingNavigationDecision.BlockedByKillSwitch -> {
+          showMessage("Blocked by VPN Kill Switch — reconnect WireGuard or turn off Kill Switch")
+        }
+        is WebViewTabPool.OutgoingNavigationDecision.WarnPublicProxyHttp -> {
+          tabWebCallbacks.onPublicProxyHttpWarning(newTab.id, decision.httpUrl)
+        }
+        is WebViewTabPool.OutgoingNavigationDecision.LoadUrl -> {
+          val loadTarget = decision.url
+          updateTab(newTab.id) {
+            it.copy(
+              url = loadTarget,
+              isLoading = true,
+              progress = 5,
+              isSecure = loadTarget.startsWith("https://", ignoreCase = true),
+            )
+          }
+          speedEngine.prewarmOrigin(loadTarget)
+          val wv = webViewPool.getOrCreateWebView(newTab.id, isIncognito, tabWebCallbacks)
+          wv.loadUrl(loadTarget)
+        }
+      }
     }
   }
 
@@ -1005,6 +1207,98 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch { repository.preferences.setLiteMode(enabled) }
   }
 
+  fun toggleHttpsOnly(enabled: Boolean) {
+    viewModelScope.launch { repository.preferences.setHttpsOnly(enabled) }
+  }
+
+  fun clearSitePermissions() {
+    viewModelScope.launch {
+      repository.clearAllSitePermissions()
+      showMessage("Saved site permissions cleared")
+    }
+  }
+
+  fun proceedWithInsecureHttp(tabId: String, httpUrl: String) {
+    webViewPool.allowInsecureHttpHost(httpUrl)
+    updateTab(tabId) {
+      it.copy(
+        url = httpUrl,
+        isSpeedDial = false,
+        isLoading = true,
+        progress = 10,
+        isSecure = false,
+        httpsWarning = null,
+      )
+    }
+    val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
+    val wv = webViewPool.getOrCreateWebView(tabId, tab.isIncognito, tabWebCallbacks)
+    wv.loadUrl(httpUrl)
+  }
+
+  fun tryHttpsInstead(tabId: String, httpsUrl: String) {
+    updateTab(tabId) {
+      it.copy(
+        url = httpsUrl,
+        isSpeedDial = false,
+        isLoading = true,
+        progress = 10,
+        isSecure = true,
+        httpsWarning = null,
+      )
+    }
+    val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
+    val wv = webViewPool.getOrCreateWebView(tabId, tab.isIncognito, tabWebCallbacks)
+    wv.loadUrl(httpsUrl)
+  }
+
+  fun dismissHttpsWarning(tabId: String) {
+    updateTab(tabId) { it.copy(httpsWarning = null) }
+    val wv = webViewPool.findWebView(tabId)
+    if (wv != null && wv.canGoBack()) {
+      wv.goBack()
+    } else {
+      updateTab(tabId) {
+        it.copy(isSpeedDial = true, title = "Speed Dial", isLoading = false, progress = 0, httpsWarning = null)
+      }
+    }
+  }
+
+  fun respondToSitePermissionPrompt(granted: Boolean, rememberForSite: Boolean) {
+    val prompt = _pendingSitePermissionPrompt.value ?: return
+    _pendingSitePermissionPrompt.value = null
+    prompt.onDecision(granted, rememberForSite)
+  }
+
+  fun onRuntimePermissionsResult(grantResults: Map<String, Boolean>) {
+    val req = _pendingRuntimePermissionRequest.value ?: return
+    _pendingRuntimePermissionRequest.value = null
+    val needsLocation =
+      req.permissions.contains(Manifest.permission.ACCESS_FINE_LOCATION) ||
+        req.permissions.contains(Manifest.permission.ACCESS_COARSE_LOCATION)
+    val locationGranted =
+      if (needsLocation) {
+        grantResults[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+          grantResults[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+          ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+          ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+      } else {
+        true
+      }
+    val otherGranted =
+      req.permissions
+        .filter {
+          it != Manifest.permission.ACCESS_FINE_LOCATION &&
+            it != Manifest.permission.ACCESS_COARSE_LOCATION
+        }
+        .all { perm ->
+          grantResults[perm] == true ||
+            ContextCompat.checkSelfPermission(app, perm) == PackageManager.PERMISSION_GRANTED
+        }
+    req.onResult(locationGranted && otherGranted)
+  }
+
   fun toggleDarkWeb(enabled: Boolean) {
     viewModelScope.launch { repository.preferences.setDarkWeb(enabled) }
   }
@@ -1044,6 +1338,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun toggleAutoWireGuardOnLaunch(enabled: Boolean) = vpnCoordinator.toggleAutoWireGuardOnLaunch(enabled)
+  fun toggleWireGuardKillSwitch(enabled: Boolean) = vpnCoordinator.toggleWireGuardKillSwitch(enabled)
+  fun resetWireGuardKillSwitch() = vpnCoordinator.resetKillSwitch()
+  fun markPublicProxyWarned() = vpnCoordinator.markPublicProxyWarned()
   fun toggleAutoProxyOnLaunch(enabled: Boolean) = vpnCoordinator.toggleAutoProxyOnLaunch(enabled)
   fun toggleAutoProxyFailover(enabled: Boolean) = vpnCoordinator.toggleAutoProxyFailover(enabled)
   fun toggleAutoDnsVpnOnLaunch(enabled: Boolean) = vpnCoordinator.toggleAutoDnsVpnOnLaunch(enabled)

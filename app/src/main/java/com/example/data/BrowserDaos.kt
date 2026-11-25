@@ -91,3 +91,24 @@ interface DownloadDao {
   @Query("DELETE FROM downloads")
   suspend fun clearAll()
 }
+
+@Dao
+interface SitePermissionDao {
+  @Query("SELECT * FROM site_permissions ORDER BY updatedAt DESC")
+  fun observeAll(): Flow<List<SitePermissionEntity>>
+
+  @Query("SELECT * FROM site_permissions")
+  suspend fun getAllSnapshot(): List<SitePermissionEntity>
+
+  @Query("SELECT granted FROM site_permissions WHERE host = :host AND permissionType = :permissionType LIMIT 1")
+  suspend fun getDecision(host: String, permissionType: String): Boolean?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsert(entity: SitePermissionEntity)
+
+  @Query("DELETE FROM site_permissions WHERE host = :host")
+  suspend fun deleteForHost(host: String)
+
+  @Query("DELETE FROM site_permissions")
+  suspend fun clearAll()
+}

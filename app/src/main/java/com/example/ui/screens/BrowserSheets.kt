@@ -92,8 +92,10 @@ fun SecurityTelemetrySheet(
   sessionDataUsedBytes: Long = 0L,
   onSelectAdBlockerType: (AdBlockerType) -> Unit,
   onToggleLiteMode: (Boolean) -> Unit,
+  onToggleHttpsOnly: (Boolean) -> Unit,
   onToggleDarkWeb: (Boolean) -> Unit,
   onToggleSiteMediaBypass: () -> Unit = {},
+  onClearSitePermissions: () -> Unit = {},
   onWipeSessionNow: () -> Unit,
   onDismiss: () -> Unit,
 ) {
@@ -314,6 +316,14 @@ fun SecurityTelemetrySheet(
         onCheckedChange = onToggleLiteMode,
       )
       SettingToggleRow(
+        icon = Icons.Default.Lock,
+        title = "HTTPS-Only Mode",
+        subtitle = "Automatically upgrade http:// sites to https:// and warn if unavailable",
+        checked = settings.httpsOnlyEnabled,
+        onCheckedChange = onToggleHttpsOnly,
+        switchTag = "https_only_switch",
+      )
+      SettingToggleRow(
         icon = Icons.Default.DarkMode,
         title = "Dark Web Rendering",
         subtitle = "Apply algorithmic dark theme to web pages",
@@ -374,6 +384,15 @@ fun SecurityTelemetrySheet(
             modifier = Modifier.testTag("site_media_bypass_switch"),
           )
         }
+      }
+
+      OutlinedButton(
+        onClick = onClearSitePermissions,
+        modifier = Modifier.fillMaxWidth().testTag("clear_site_permissions_button"),
+      ) {
+        Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Reset Saved Site Permissions (Camera, Mic, Location)")
       }
 
       OutlinedButton(
@@ -842,6 +861,7 @@ private fun SettingToggleRow(
   subtitle: String,
   checked: Boolean,
   onCheckedChange: (Boolean) -> Unit,
+  switchTag: String? = null,
 ) {
   val voltColors = LocalVoltColors.current
   Row(
@@ -862,7 +882,11 @@ private fun SettingToggleRow(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
-    Switch(checked = checked, onCheckedChange = onCheckedChange)
+    Switch(
+      checked = checked,
+      onCheckedChange = onCheckedChange,
+      modifier = if (switchTag != null) Modifier.testTag(switchTag) else Modifier,
+    )
   }
 }
 

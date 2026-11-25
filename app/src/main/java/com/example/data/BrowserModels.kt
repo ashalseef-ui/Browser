@@ -148,6 +148,19 @@ enum class DownloadStatus {
   CANCELLED,
 }
 
+enum class SitePermissionType(val label: String) {
+  CAMERA("Camera"),
+  MICROPHONE("Microphone"),
+  LOCATION("Location"),
+}
+
+data class HttpsWarningState(
+  val failedUrl: String,
+  val fallbackHttpUrl: String,
+  val reason: String,
+  val isPublicProxyWarning: Boolean = false,
+)
+
 data class BrowserTabState(
   val id: String = UUID.randomUUID().toString(),
   val url: String = "",
@@ -165,6 +178,7 @@ data class BrowserTabState(
   val detectedMedia: List<DetectedMediaItem> = emptyList(),
   val isScanningMedia: Boolean = false,
   val isSpeedDial: Boolean = true,
+  val httpsWarning: HttpsWarningState? = null,
 )
 
 enum class AppThemeMode(val displayName: String) {
@@ -192,10 +206,14 @@ data class BrowserSettings(
   val darkWebEnabled: Boolean = true,
   val desktopModeEnabled: Boolean = false,
   val autoWireGuardOnLaunchEnabled: Boolean = false,
+  val wireGuardKillSwitchEnabled: Boolean = false,
+  val hasSeenPublicProxyWarning: Boolean = false,
   val preferredWireGuardMode: com.example.vpn.WireGuardMode = com.example.vpn.WireGuardMode.WARP_FREE,
   val savedWarpConf: String = "",
   val savedCustomWgConf: String = "",
   val savedCustomWgName: String = "",
+  val warpConfigDecryptFailed: Boolean = false,
+  val customWgConfigDecryptFailed: Boolean = false,
   val autoProxyOnLaunchEnabled: Boolean = false,
   val autoProxyFailoverEnabled: Boolean = true,
   val autoDnsVpnOnLaunchEnabled: Boolean = false,

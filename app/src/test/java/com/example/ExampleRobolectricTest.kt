@@ -382,6 +382,21 @@ class ExampleRobolectricTest {
     assertTrue(blockImg)
     assertTrue(imgBytes > 0L)
 
+    val (blockAcceptImg, acceptImgBytes) =
+      com.example.browser.VoltDataSaver.shouldBlockForDataSaver(
+        Uri.parse("https://cdn.example.com/avatar?id=42"),
+        mapOf("Accept" to "image/avif,image/webp,image/*,*/*;q=0.8"),
+      )
+    assertTrue(blockAcceptImg)
+    assertEquals(com.example.browser.VoltDataSaver.ESTIMATED_IMAGE_BYTES, acceptImgBytes)
+
+    val gifResp = com.example.browser.VoltDataSaver.emptySaverResponse(isImage = true)
+    assertEquals(200, gifResp.statusCode)
+    assertEquals("image/gif", gifResp.mimeType)
+
+    val fontResp = com.example.browser.VoltDataSaver.emptySaverResponse(isImage = false)
+    assertEquals(404, fontResp.statusCode)
+
     val (blockFont, fontBytes) = com.example.browser.VoltDataSaver.shouldBlockForDataSaver(Uri.parse("https://fonts.example.com/inter.woff2"))
     assertTrue(blockFont)
     assertTrue(fontBytes > 0L)
@@ -708,7 +723,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `secure config cipher encrypts decrypts handles empty and passes legacy plaintext`() {
+  fun `secure config cipher encrypts decrypts handles empty returns null on failure and passes legacy plaintext`() {
     val keyGen = KeyGenerator.getInstance("AES")
     keyGen.init(256)
     val secretKey = keyGen.generateKey()
@@ -722,6 +737,7 @@ class ExampleRobolectricTest {
     assertEquals(wgConf, SecureConfigCipher.decryptWithKey(wgConf, secretKey))
     assertEquals("", SecureConfigCipher.encrypt(""))
     assertEquals("", SecureConfigCipher.decrypt(""))
+    assertNull(SecureConfigCipher.decrypt("enc:v1:corrupted_payload"))
   }
 
   @Test
@@ -799,5 +815,70 @@ class ExampleRobolectricTest {
 
     MediaSniffer.clearPlaybackContexts()
     assertNull(MediaSniffer.getPlaybackContext(mediaUrl))
+  }
+
+  @Test
+  fun `media js bridge caps payload size and item count and handles web message envelope`() {
+    val receivedBatches = mutableListOf<List<DetectedMediaItem>>()
+    val bridge =
+      com.example.browser.VoltMediaJsBridge(
+        onDetected = { receivedBatches.add(it) },
+        currentPageUrlProvider = { "https://watch.example.com" },
+      )
+
+    val items =
+      (1..55).joinToString(",") { idx ->
+        """{"url":"https://cdn.example.com/v$idx.mp4","kind":"VIDEO","title":"Video $idx"}"""
+      }
+    bridge.handleWebMessage("""{"type":"mediaFound","payload":[$items]}""")
+    assertEquals(1, receivedBatches.size)
+    assertEquals(com.example.browser.VoltMediaJsBridge.MAX_MEDIA_ITEMS, receivedBatches[0].size)
+
+    val oversized = "x".repeat(com.example.browser.VoltMediaJsBridge.MAX_MEDIA_JSON_CHARS + 100)
+    bridge.onMediaFound("""[{"url":"https://cdn.example.com/$oversized.mp4"}]""")
+    assertEquals(1, receivedBatches.size)
+  }
+
+  @Test
+  fun `https upgrade public relay flag and privacy security defaults work properly`() {
+    assertEquals(
+      "https://example.com/path?x=1",
+      WebViewTabPool.upgradeHttpToHttps("http://example.com/path?x=1"),
+    )
+    assertEquals(
+      "https://already.example.com",
+      WebViewTabPool.upgradeHttpToHttps("https://already.example.com"),
+    )
+
+    val publicNode =
+      com.example.vpn.PublicRelayNode(
+        ip = "198.51.100.10",
+        port = 8080,
+        country = "Germany",
+        countryCode = "DE",
+        protocol = "HTTP",
+        anonymity = "anonymous",
+        source = "ProxyScrape",
+      )
+    assertTrue(publicNode.isPublicFreeRelay)
+
+    val privateAuthNode =
+      com.example.vpn.PublicRelayNode(
+        ip = "198.51.100.11",
+        port = 3128,
+        country = "Private Auth Proxy",
+        countryCode = "CUSTOM",
+        protocol = "HTTP",
+        anonymity = "private",
+        source = "Private Auth",
+        username = "alice",
+        password = "secret",
+      )
+    assertFalse(privateAuthNode.isPublicFreeRelay)
+
+    val defaults = com.example.data.BrowserSettings()
+    assertFalse(defaults.httpsOnlyEnabled)
+    assertFalse(defaults.wireGuardKillSwitchEnabled)
+    assertFalse(defaults.hasSeenPublicProxyWarning)
   }
 }

@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -42,6 +44,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +60,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -91,6 +96,8 @@ fun FreePublicVpnSheet(
   onConnectCustomWgConf: (confText: String, profileName: String) -> Unit,
   onDisconnectWireGuard: () -> Unit,
   onToggleAutoWireGuardOnLaunch: (Boolean) -> Unit,
+  onToggleWireGuardKillSwitch: (Boolean) -> Unit,
+  onResetKillSwitch: () -> Unit,
   onRefreshRelays: () -> Unit,
   onAutoConnectFastestRelay: () -> Unit,
   onRotateProxy: () -> Unit,
@@ -99,6 +106,7 @@ fun FreePublicVpnSheet(
   onToggleAutoProxyFailover: (Boolean) -> Unit,
   onToggleAutoProxyOnLaunch: (Boolean) -> Unit,
   onToggleAutoDnsVpnOnLaunch: (Boolean) -> Unit,
+  onConfirmPublicProxyWarning: () -> Unit,
   onSelectProtocolFilter: (ProxyProtocolFilter) -> Unit,
   onSelectCountryFilter: (String) -> Unit,
   onConnectCustomProxy: (String, String) -> Unit,
@@ -111,7 +119,13 @@ fun FreePublicVpnSheet(
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
   var showWireGuardDetails by remember {
-    mutableStateOf(state.isWireGuardActive || state.isWireGuardConnecting)
+    mutableStateOf(
+      state.isWireGuardActive ||
+        state.isWireGuardConnecting ||
+        state.isKillSwitchTripped ||
+        state.warpConfigDecryptFailed ||
+        state.customWgConfigDecryptFailed
+    )
   }
   var showCustomWgEditor by remember { mutableStateOf(false) }
   var customWgConfText by remember { mutableStateOf(settings.savedCustomWgConf) }
@@ -123,6 +137,15 @@ fun FreePublicVpnSheet(
   var showCustomProxyInput by remember { mutableStateOf(false) }
   var customProxyText by remember { mutableStateOf("") }
   var customProxyProtocol by remember { mutableStateOf("HTTP") }
+  var pendingPublicProxyAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+  val runWithPublicProxyWarning: (() -> Unit) -> Unit = { action ->
+    if (settings.hasSeenPublicProxyWarning) {
+      action()
+    } else {
+      pendingPublicProxyAction = action
+    }
+  }
 
   var showDnsDetails by remember { mutableStateOf(state.isDnsVpnActive) }
 
@@ -337,15 +360,19 @@ fun FreePublicVpnSheet(
                 Text(
                   text =
                     when {
+                      state.isKillSwitchTripped -> "Kill Switch Blocking Traffic"
                       state.isWireGuardConnecting -> "Establishing encrypted tunnel..."
                       state.isWireGuardActive ->
                         "${state.wireGuardProfileName} • ↓ ${formatTransferBytes(state.wireGuardRxBytes)}  ↑ ${formatTransferBytes(state.wireGuardTxBytes)}"
-                      else -> "Cloudflare WARP & Custom .conf (Fastest)"
+                      else -> "WARP (Experimental) & Custom .conf"
                     },
                   style = MaterialTheme.typography.labelSmall,
                   color =
-                    if (state.isWireGuardActive) voltColors.emeraldShield
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    when {
+                      state.isKillSwitchTripped -> MaterialTheme.colorScheme.error
+                      state.isWireGuardActive -> voltColors.emeraldShield
+                      else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
@@ -389,6 +416,63 @@ fun FreePublicVpnSheet(
               ) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+                if (state.warpConfigDecryptFailed || state.customWgConfigDecryptFailed) {
+                  Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = voltColors.amberAccent.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, voltColors.amberAccent.copy(alpha = 0.55f)),
+                  ) {
+                    Row(
+                      modifier = Modifier.fillMaxWidth().padding(10.dp),
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = voltColors.amberAccent,
+                        modifier = Modifier.size(18.dp),
+                      )
+                      Text(
+                        text =
+                          "Saved WireGuard config could not be decrypted with the device keystore. Please re-import your .conf file or reconnect WARP.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                      )
+                    }
+                  }
+                }
+
+                if (state.isKillSwitchTripped) {
+                  Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                  ) {
+                    Column(
+                      modifier = Modifier.fillMaxWidth().padding(12.dp),
+                      verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                      Text(
+                        text = "VPN Dropped — Kill Switch Blocking All Browser Traffic",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                      )
+                      Text(
+                        text = "Reconnect WireGuard or disable the Kill Switch below to restore direct browsing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                      )
+                      OutlinedButton(
+                        onClick = onResetKillSwitch,
+                        modifier = Modifier.fillMaxWidth().testTag("reset_kill_switch_button"),
+                      ) {
+                        Text("Disable Kill Switch & Restore Direct Access")
+                      }
+                    }
+                  }
+                }
+
                 Row(
                   modifier = Modifier.fillMaxWidth(),
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -418,7 +502,7 @@ fun FreePublicVpnSheet(
                       text =
                         if (state.isWireGuardActive && state.wireGuardMode == WireGuardMode.WARP_FREE)
                           "WARP Active"
-                        else "Cloudflare WARP",
+                        else "WARP (Exp.)",
                       style = MaterialTheme.typography.labelMedium,
                       maxLines = 1,
                     )
@@ -511,6 +595,50 @@ fun FreePublicVpnSheet(
                     modifier = Modifier.testTag("auto_wireguard_startup_switch"),
                   )
                 }
+
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Text(
+                    text = "Block traffic if VPN drops",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                  )
+                  Switch(
+                    checked = settings.wireGuardKillSwitchEnabled,
+                    onCheckedChange = onToggleWireGuardKillSwitch,
+                    modifier = Modifier.testTag("wg_kill_switch_switch"),
+                  )
+                }
+
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  Text(
+                    text = "True system-wide Always-on lockdown must be enabled in Android VPN Settings.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                  )
+                  OutlinedButton(
+                    onClick = {
+                      runCatching {
+                        context.startActivity(
+                          Intent(Settings.ACTION_VPN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                      }
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("open_android_vpn_settings_button"),
+                  ) {
+                    Text("VPN Settings", style = MaterialTheme.typography.labelSmall)
+                  }
+                }
               }
             }
           }
@@ -597,8 +725,10 @@ fun FreePublicVpnSheet(
                 enabled = !state.isFetchingRelays && !state.isConnectingRelay,
                 onCheckedChange = { enabled ->
                   if (enabled) {
-                    showProxyDetails = true
-                    onAutoConnectFastestRelay()
+                    runWithPublicProxyWarning {
+                      showProxyDetails = true
+                      onAutoConnectFastestRelay()
+                    }
                   } else {
                     onDisconnectRelay()
                   }
@@ -619,7 +749,11 @@ fun FreePublicVpnSheet(
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                   Button(
-                    onClick = if (state.activeRelay != null) onRotateProxy else onAutoConnectFastestRelay,
+                    onClick = {
+                      runWithPublicProxyWarning {
+                        if (state.activeRelay != null) onRotateProxy() else onAutoConnectFastestRelay()
+                      }
+                    },
                     enabled = !state.isFetchingRelays && !state.isConnectingRelay,
                     modifier = Modifier.weight(1f).height(44.dp).testTag("auto_connect_relay_button"),
                     colors =
@@ -805,7 +939,13 @@ fun FreePublicVpnSheet(
               Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
                 .clickable(enabled = relay.isReachable == true && !state.isConnectingRelay) {
-                  if (isConnected) onDisconnectRelay() else onConnectRelay(relay)
+                  if (isConnected) {
+                    onDisconnectRelay()
+                  } else if (relay.isPublicFreeRelay) {
+                    runWithPublicProxyWarning { onConnectRelay(relay) }
+                  } else {
+                    onConnectRelay(relay)
+                  }
                 },
           ) {
             Row(
@@ -1014,6 +1154,48 @@ fun FreePublicVpnSheet(
 
       item { Spacer(modifier = Modifier.height(16.dp)) }
     }
+  }
+
+  pendingPublicProxyAction?.let { actionToRun ->
+    AlertDialog(
+      onDismissRequest = { pendingPublicProxyAction = null },
+      icon = {
+        Icon(
+          imageVector = Icons.Default.Warning,
+          contentDescription = null,
+          tint = voltColors.amberAccent,
+        )
+      },
+      title = { Text("Public Proxy Security Notice") },
+      text = {
+        Text(
+          text =
+            "Free public proxies (ProxyScrape, GeoNode, and public lists) are run by unknown third parties. Plain HTTP traffic can be read or altered by the proxy operator.\n\nUse HTTPS websites or WireGuard VPN for sensitive browsing. Volt Browser will also warn before opening plain HTTP pages over a public relay.",
+          style = MaterialTheme.typography.bodyMedium,
+        )
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            onConfirmPublicProxyWarning()
+            val pending = actionToRun
+            pendingPublicProxyAction = null
+            pending()
+          },
+          modifier = Modifier.testTag("confirm_public_proxy_warning_button"),
+        ) {
+          Text("Understand & Connect")
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = { pendingPublicProxyAction = null },
+          modifier = Modifier.testTag("cancel_public_proxy_warning_button"),
+        ) {
+          Text("Cancel")
+        }
+      },
+    )
   }
 }
 

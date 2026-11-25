@@ -437,20 +437,40 @@ object MediaSniffer {
         } catch (e) {}
       }
 
+      function postVoltMessage(type, payload) {
+        try {
+          if (window.VoltMediaChannel && typeof window.VoltMediaChannel.postMessage === 'function') {
+            window.VoltMediaChannel.postMessage(JSON.stringify({ type: type, payload: payload }));
+            return true;
+          }
+          if (window.VoltMediaBridge) {
+            if (type === 'mediaFound' && window.VoltMediaBridge.onMediaFound) {
+              window.VoltMediaBridge.onMediaFound(JSON.stringify(payload));
+              return true;
+            }
+            if (type === 'touchTarget' && window.VoltMediaBridge.onTouchTargetDetected) {
+              window.VoltMediaBridge.onTouchTargetDetected(JSON.stringify(payload));
+              return true;
+            }
+          }
+        } catch (e) {}
+        return false;
+      }
+
       function emitDynamicUrl(url) {
         try {
           if (!url || typeof url !== 'string') return;
           var abs = resolveAbsolute(url, location.href);
-          if (isMediaLink(abs) && window.VoltMediaBridge) {
+          if (isMediaLink(abs)) {
             var kind = classifySrc(abs);
             if (kind !== 'AUDIO') {
-              window.VoltMediaBridge.onMediaFound(JSON.stringify([{
+              postVoltMessage('mediaFound', [{
                 url: abs,
                 kind: kind,
                 title: document.title || location.hostname || 'Web Video',
                 poster: '',
                 duration: 0
-              }]));
+              }]);
             }
           }
         } catch (e) {}
@@ -491,8 +511,8 @@ object MediaSniffer {
               if (f.contentDocument) scanDoc(f.contentDocument, found, seen, pageTitle);
             } catch (e) {}
           });
-          if (found.length > 0 && window.VoltMediaBridge) {
-            window.VoltMediaBridge.onMediaFound(JSON.stringify(found));
+          if (found.length > 0) {
+            postVoltMessage('mediaFound', found.slice(0, 40));
           }
         } catch (e) {}
       };
@@ -551,14 +571,14 @@ object MediaSniffer {
             var hasTarget = !!(linkUrl || imageUrl || mediaUrl);
             if (!hasTarget && !window.__voltHadTouchTarget) return;
             window.__voltHadTouchTarget = hasTarget;
-            if (window.VoltMediaBridge && window.VoltMediaBridge.onTouchTargetDetected) {
-              window.VoltMediaBridge.onTouchTargetDetected(JSON.stringify({
+            if (hasTarget) {
+              postVoltMessage('touchTarget', {
                 linkUrl: linkUrl || '',
                 linkText: linkText || '',
                 imageUrl: imageUrl || '',
                 mediaUrl: mediaUrl || '',
                 mediaTitle: mediaTitle || ''
-              }));
+              });
             }
           } catch (e) {}
         }
@@ -583,73 +603,123 @@ class VoltMediaJsBridge(
   private val onBlobDownloaded: (dataUrl: String, suggestedName: String, mimeType: String) -> Unit = { _, _, _ -> },
   private val onTouchTarget: (linkUrl: String?, linkText: String?, imageUrl: String?, mediaUrl: String?, mediaTitle: String?) -> Unit = { _, _, _, _, _ -> },
 ) {
-  @JavascriptInterface
-  fun onTouchTargetDetected(jsonPayload: String) {
+  fun handleWebMessage(rawMessage: String) {
+    if (rawMessage.isBlank() || rawMessage.length > MAX_WEB_MESSAGE_CHARS) return
     runCatching {
-      val obj = JSONObject(jsonPayload)
-      val linkUrl = obj.optString("linkUrl").takeIf { it.isNotBlank() }
-      val linkText = obj.optString("linkText").takeIf { it.isNotBlank() }
-      val imageUrl = obj.optString("imageUrl").takeIf { it.isNotBlank() }
-      val mediaUrl = obj.optString("mediaUrl").takeIf { it.isNotBlank() }
-      val mediaTitle = obj.optString("mediaTitle").takeIf { it.isNotBlank() }
-      onTouchTarget(linkUrl, linkText, imageUrl, mediaUrl, mediaTitle)
+      val envelope = JSONObject(rawMessage)
+      when (envelope.optString("type")) {
+        "mediaFound" -> {
+          val array = envelope.optJSONArray("payload") ?: return
+          val serialized = array.toString()
+          if (serialized.length <= MAX_MEDIA_JSON_CHARS) {
+            parseAndEmitMediaArray(array)
+          }
+        }
+        "touchTarget" -> {
+          val payload = envelope.optJSONObject("payload") ?: return
+          val serialized = payload.toString()
+          if (serialized.length <= MAX_TOUCH_JSON_CHARS) {
+            handleTouchTargetObject(payload)
+          }
+        }
+        "blobDownload" -> {
+          val payload = envelope.optJSONObject("payload") ?: return
+          onBlobDownloadData(
+            dataUrl = payload.optString("dataUrl"),
+            suggestedName = payload.optString("suggestedName"),
+            mimeType = payload.optString("mimeType"),
+          )
+        }
+      }
     }
   }
 
   @JavascriptInterface
+  fun onTouchTargetDetected(jsonPayload: String) {
+    if (jsonPayload.isBlank() || jsonPayload.length > MAX_TOUCH_JSON_CHARS) return
+    runCatching {
+      handleTouchTargetObject(JSONObject(jsonPayload))
+    }
+  }
+
+  private fun handleTouchTargetObject(obj: JSONObject) {
+    val linkUrl = obj.optString("linkUrl").take(MAX_URL_LENGTH).takeIf { it.isNotBlank() }
+    val linkText = obj.optString("linkText").take(MAX_TITLE_LENGTH).takeIf { it.isNotBlank() }
+    val imageUrl = obj.optString("imageUrl").take(MAX_URL_LENGTH).takeIf { it.isNotBlank() }
+    val mediaUrl = obj.optString("mediaUrl").take(MAX_URL_LENGTH).takeIf { it.isNotBlank() }
+    val mediaTitle = obj.optString("mediaTitle").take(MAX_TITLE_LENGTH).takeIf { it.isNotBlank() }
+    onTouchTarget(linkUrl, linkText, imageUrl, mediaUrl, mediaTitle)
+  }
+
+  @JavascriptInterface
   fun onBlobDownloadData(dataUrl: String, suggestedName: String, mimeType: String) {
-    if (dataUrl.startsWith("data:", ignoreCase = true) && dataUrl.length <= 36_000_000) {
-      onBlobDownloaded(dataUrl, suggestedName, mimeType)
+    if (dataUrl.startsWith("data:", ignoreCase = true) && dataUrl.length <= MAX_BLOB_DATA_URL_CHARS) {
+      onBlobDownloaded(dataUrl, suggestedName.take(MAX_TITLE_LENGTH), mimeType.take(120))
     }
   }
 
   @JavascriptInterface
   fun onMediaFound(jsonPayload: String) {
+    if (jsonPayload.isBlank() || jsonPayload.length > MAX_MEDIA_JSON_CHARS) return
     runCatching {
-      val array = JSONArray(jsonPayload)
-      val pageUrl = currentPageUrlProvider()
-      val items = buildList {
-        for (i in 0 until array.length()) {
-          val obj = array.optJSONObject(i) ?: continue
-          val url = obj.optString("url")
-          if (url.isBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
-            continue
-          }
-          val kindStr = obj.optString("kind", "VIDEO")
-          val kind =
-            when (kindStr) {
-              "AUDIO" -> MediaKind.AUDIO
-              "STREAM_HLS" -> MediaKind.STREAM_HLS
-              "STREAM_DASH" -> MediaKind.STREAM_DASH
-              "PLAYLIST" -> MediaKind.PLAYLIST
-              else -> MediaKind.VIDEO
-            }
-          val mime =
-            when (kind) {
-              MediaKind.AUDIO -> "audio/mpeg"
-              MediaKind.STREAM_HLS -> "application/x-mpegURL"
-              MediaKind.STREAM_DASH -> "application/dash+xml"
-              MediaKind.PLAYLIST -> "audio/x-mpegurl"
-              MediaKind.VIDEO -> "video/mp4"
-            }
-          val duration = obj.optLong("duration", 0L).takeIf { it > 0L }
-          val poster = obj.optString("poster").takeIf { it.isNotBlank() }
-          add(
-            DetectedMediaItem(
-              url = url,
-              title = obj.optString("title").ifBlank { "Web Video" },
-              kind = kind,
-              mimeType = mime,
-              sourcePageUrl = pageUrl,
-              posterUrl = poster,
-              durationSeconds = duration,
-            )
-          )
+      parseAndEmitMediaArray(JSONArray(jsonPayload))
+    }
+  }
+
+  private fun parseAndEmitMediaArray(array: JSONArray) {
+    val pageUrl = currentPageUrlProvider()
+    val count = minOf(array.length(), MAX_MEDIA_ITEMS)
+    val items = buildList {
+      for (i in 0 until count) {
+        val obj = array.optJSONObject(i) ?: continue
+        val url = obj.optString("url").take(MAX_URL_LENGTH)
+        if (url.isBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+          continue
         }
-      }
-      if (items.isNotEmpty()) {
-        onDetected(items)
+        val kindStr = obj.optString("kind", "VIDEO")
+        val kind =
+          when (kindStr) {
+            "AUDIO" -> MediaKind.AUDIO
+            "STREAM_HLS" -> MediaKind.STREAM_HLS
+            "STREAM_DASH" -> MediaKind.STREAM_DASH
+            "PLAYLIST" -> MediaKind.PLAYLIST
+            else -> MediaKind.VIDEO
+          }
+        val mime =
+          when (kind) {
+            MediaKind.AUDIO -> "audio/mpeg"
+            MediaKind.STREAM_HLS -> "application/x-mpegURL"
+            MediaKind.STREAM_DASH -> "application/dash+xml"
+            MediaKind.PLAYLIST -> "audio/x-mpegurl"
+            MediaKind.VIDEO -> "video/mp4"
+          }
+        val duration = obj.optLong("duration", 0L).takeIf { it > 0L }
+        val poster = obj.optString("poster").take(MAX_URL_LENGTH).takeIf { it.isNotBlank() }
+        add(
+          DetectedMediaItem(
+            url = url,
+            title = obj.optString("title").take(MAX_TITLE_LENGTH).ifBlank { "Web Video" },
+            kind = kind,
+            mimeType = mime,
+            sourcePageUrl = pageUrl,
+            posterUrl = poster,
+            durationSeconds = duration,
+          )
+        )
       }
     }
+    if (items.isNotEmpty()) {
+      onDetected(items)
+    }
+  }
+
+  companion object {
+    const val MAX_MEDIA_JSON_CHARS = 65_536
+    const val MAX_MEDIA_ITEMS = 40
+    const val MAX_TOUCH_JSON_CHARS = 16_384
+    const val MAX_BLOB_DATA_URL_CHARS = 36_000_000
+    const val MAX_WEB_MESSAGE_CHARS = 37_000_000
+    const val MAX_URL_LENGTH = 4096
+    const val MAX_TITLE_LENGTH = 240
   }
 }

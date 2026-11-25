@@ -44,19 +44,26 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -130,6 +137,8 @@ fun VoltBrowserScreen(
   val socialSidebarOpen by viewModel.socialSidebarOpen.collectAsStateWithLifecycle()
   val socialApps by viewModel.socialApps.collectAsStateWithLifecycle()
   val hasSystemAutofill by viewModel.hasSystemAutofill.collectAsStateWithLifecycle()
+  val pendingSitePermissionPrompt by viewModel.pendingSitePermissionPrompt.collectAsStateWithLifecycle()
+  val pendingRuntimePermissions by viewModel.pendingRuntimePermissionRequest.collectAsStateWithLifecycle()
 
   val isMediaOverlayFullscreen = mediaState.isVisible && !mediaState.isMinimized && !isInPipMode
   val isAnyFullscreen = fullscreenCustomView != null || isBrowserFullscreen || isMediaOverlayFullscreen
@@ -182,6 +191,16 @@ fun VoltBrowserScreen(
   var askedNotificationPermission by remember { mutableStateOf(false) }
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
+
+  val runtimePermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+      viewModel.onRuntimePermissionsResult(results)
+    }
+
+  LaunchedEffect(pendingRuntimePermissions) {
+    val req = pendingRuntimePermissions ?: return@LaunchedEffect
+    runtimePermissionLauncher.launch(req.permissions.toTypedArray())
+  }
 
   val hasActiveDownload = downloads.any { it.status == "DOWNLOADING" }
   LaunchedEffect(mediaState.isVisible, hasActiveDownload) {
@@ -530,6 +549,77 @@ fun VoltBrowserScreen(
                     modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
                   )
                 }
+
+                activeTab.httpsWarning?.let { warning ->
+                  Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxSize().testTag("https_warning_overlay"),
+                  ) {
+                    Column(
+                      modifier =
+                        Modifier.fillMaxSize()
+                          .padding(horizontal = 24.dp, vertical = 32.dp),
+                      verticalArrangement = Arrangement.Center,
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = voltColors.amberAccent,
+                        modifier = Modifier.size(48.dp),
+                      )
+                      Spacer(modifier = Modifier.size(16.dp))
+                      Text(
+                        text =
+                          if (warning.isPublicProxyWarning) "Unencrypted HTTP Over Public Proxy"
+                          else "HTTPS Connection Unavailable",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                      )
+                      Spacer(modifier = Modifier.size(10.dp))
+                      Text(
+                        text =
+                          if (warning.isPublicProxyWarning) {
+                            "${extractHost(warning.fallbackHttpUrl)} uses plain HTTP. ${warning.reason}"
+                          } else {
+                            "HTTPS-Only Mode could not load ${extractHost(warning.fallbackHttpUrl)} over HTTPS (${warning.reason})."
+                          },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                      Spacer(modifier = Modifier.size(24.dp))
+                      if (warning.isPublicProxyWarning) {
+                        Button(
+                          onClick = {
+                            viewModel.tryHttpsInstead(activeTab.id, warning.failedUrl)
+                          },
+                          modifier = Modifier.fillMaxWidth().testTag("try_https_button"),
+                        ) {
+                          Text("Try HTTPS Instead")
+                        }
+                        Spacer(modifier = Modifier.size(10.dp))
+                      }
+                      OutlinedButton(
+                        onClick = { viewModel.dismissHttpsWarning(activeTab.id) },
+                        modifier = Modifier.fillMaxWidth().testTag("https_warning_back_button"),
+                      ) {
+                        Text("Go Back")
+                      }
+                      Spacer(modifier = Modifier.size(8.dp))
+                      TextButton(
+                        onClick = {
+                          viewModel.proceedWithInsecureHttp(activeTab.id, warning.fallbackHttpUrl)
+                        },
+                        modifier = Modifier.testTag("continue_http_button"),
+                      ) {
+                        Text(
+                          text = "Continue Anyway (Insecure HTTP)",
+                          color = MaterialTheme.colorScheme.error,
+                        )
+                      }
+                    }
+                  }
+                }
               }
 
               if (!isInPipMode) {
@@ -702,8 +792,10 @@ fun VoltBrowserScreen(
           sessionDataUsedBytes = sessionDataUsedBytes,
           onSelectAdBlockerType = viewModel::setAdBlockerType,
           onToggleLiteMode = viewModel::toggleLiteMode,
+          onToggleHttpsOnly = viewModel::toggleHttpsOnly,
           onToggleDarkWeb = viewModel::toggleDarkWeb,
           onToggleSiteMediaBypass = viewModel::toggleCurrentSiteMediaCompatBypass,
+          onClearSitePermissions = viewModel::clearSitePermissions,
           onWipeSessionNow = viewModel::wipeSessionCacheAndCookies,
           onDismiss = viewModel::closeSheet,
         )
@@ -746,6 +838,8 @@ fun VoltBrowserScreen(
           },
           onDisconnectWireGuard = { viewModel.disconnectWireGuard() },
           onToggleAutoWireGuardOnLaunch = viewModel::toggleAutoWireGuardOnLaunch,
+          onToggleWireGuardKillSwitch = viewModel::toggleWireGuardKillSwitch,
+          onResetKillSwitch = viewModel::resetWireGuardKillSwitch,
           onRefreshRelays = viewModel::refreshPublicRelays,
           onAutoConnectFastestRelay = { viewModel.autoConnectFastestRelay(reloadActiveTab = false) },
           onRotateProxy = { viewModel.rotateToNextProxy(reloadActiveTab = false) },
@@ -759,6 +853,7 @@ fun VoltBrowserScreen(
               runWithVpnConsent { viewModel.startDnsVpnService() }
             }
           },
+          onConfirmPublicProxyWarning = viewModel::markPublicProxyWarned,
           onSelectProtocolFilter = viewModel::setProxyProtocolFilter,
           onSelectCountryFilter = viewModel::setProxyCountryFilter,
           onConnectCustomProxy = viewModel::connectCustomProxy,
@@ -816,6 +911,74 @@ fun VoltBrowserScreen(
         },
         onCopiedToast = { msg -> viewModel.showMessage(msg) },
         onDismiss = viewModel::dismissContextMenu,
+      )
+    }
+
+    // Per-Site Permission Prompt (Camera, Microphone, Location)
+    pendingSitePermissionPrompt?.let { prompt ->
+      val permLabels = prompt.requestedTypes.joinToString(", ") { it.label }
+      AlertDialog(
+        onDismissRequest = {
+          viewModel.respondToSitePermissionPrompt(granted = false, rememberForSite = false)
+        },
+        icon = {
+          Icon(
+            imageVector = Icons.Default.Security,
+            contentDescription = null,
+            tint = voltColors.cyanAccent,
+          )
+        },
+        title = { Text("Permission Request") },
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+              text = "${prompt.host} wants to access: $permLabels",
+              style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+              text =
+                if (prompt.isIncognito) {
+                  "Private tab: permissions are never saved beyond this session."
+                } else {
+                  "You can allow once, allow for ${prompt.host}, or deny."
+                },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        },
+        confirmButton = {
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  viewModel.respondToSitePermissionPrompt(granted = true, rememberForSite = false)
+                },
+                modifier = Modifier.testTag("site_perm_allow_once_button"),
+              ) {
+                Text("Allow once")
+              }
+              Button(
+                onClick = {
+                  viewModel.respondToSitePermissionPrompt(granted = true, rememberForSite = true)
+                },
+                modifier = Modifier.testTag("site_perm_allow_site_button"),
+              ) {
+                Text(if (prompt.isIncognito) "Allow session" else "Allow site")
+              }
+            }
+          }
+        },
+        dismissButton = {
+          TextButton(
+            onClick = {
+              viewModel.respondToSitePermissionPrompt(granted = false, rememberForSite = false)
+            },
+            modifier = Modifier.testTag("site_perm_deny_button"),
+          ) {
+            Text("Deny")
+          }
+        },
       )
     }
   }

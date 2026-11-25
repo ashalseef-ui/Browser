@@ -111,7 +111,8 @@ class VoltSpeedEngine(private val context: Context) {
   fun getActiveProxyCredentials(): Pair<String, String>? =
     activeProxyAuthRef.get()?.let { it.username to it.password }
 
-  @Suppress("OPT_IN_USAGE")
+  @OptIn(WebViewCompat.ExperimentalAsyncStartUp::class)
+  @androidx.annotation.OptIn(markerClass = [WebViewCompat.ExperimentalAsyncStartUp::class])
   fun warmUpChromiumAsync() {
     runCatching {
       val config = WebViewStartUpConfig.Builder(startupExecutor).build()
@@ -169,6 +170,8 @@ class VoltSpeedEngine(private val context: Context) {
     ws.displayZoomControls = false
     ws.allowFileAccess = false
     ws.allowContentAccess = true
+    ws.setSupportMultipleWindows(true)
+    ws.javaScriptCanOpenWindowsAutomatically = false
     ws.mediaPlaybackRequiresUserGesture = false
     ws.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
     ws.loadsImagesAutomatically = !settings.liteModeEnabled

@@ -27,6 +27,8 @@ class VpnProxyCoordinator(
   private val settingsFlow: StateFlow<BrowserSettings>,
   private val activeTabProvider: () -> BrowserTabState,
   private val onReloadActiveTab: () -> Unit,
+  private val onStopAllWebViewLoads: () -> Unit,
+  private val onKillSwitchBlockingChanged: (Boolean) -> Unit,
   private val onShowMessage: (String) -> Unit,
 ) {
   val relayManager = PublicRelayManager()
@@ -34,6 +36,7 @@ class VpnProxyCoordinator(
   private var wireGuardStatsJob: Job? = null
   private val skippedRelayIds = mutableSetOf<String>()
   private var lastFailoverTimestamp = 0L
+  @Volatile private var expectedWireGuardDisconnect = false
 
   private val _vpnRelayState = MutableStateFlow(VpnTunnelState())
   val vpnState: StateFlow<VpnTunnelState> =
@@ -49,20 +52,35 @@ class VpnProxyCoordinator(
       .stateIn(scope, SharingStarted.Eagerly, VpnTunnelState())
 
   fun syncSavedConfigs(currentSettings: BrowserSettings) {
-    _vpnRelayState.update {
-      it.copy(
+    val decryptFailed = currentSettings.warpConfigDecryptFailed || currentSettings.customWgConfigDecryptFailed
+    _vpnRelayState.update { state ->
+      state.copy(
         hasSavedWarpConfig = currentSettings.savedWarpConf.isNotBlank(),
         hasSavedCustomWgConf = currentSettings.savedCustomWgConf.isNotBlank(),
+        warpConfigDecryptFailed = currentSettings.warpConfigDecryptFailed,
+        customWgConfigDecryptFailed = currentSettings.customWgConfigDecryptFailed,
+        statusMessage =
+          if (decryptFailed && state.statusMessage == null) {
+            "Saved WireGuard config could not be decrypted — please re-import"
+          } else {
+            state.statusMessage
+          },
       )
     }
   }
 
   fun initializeOnStartup(initialSettings: BrowserSettings) {
+    val decryptFailed = initialSettings.warpConfigDecryptFailed || initialSettings.customWgConfigDecryptFailed
     _vpnRelayState.update {
       it.copy(
         activeDohProvider = initialSettings.preferredDohProvider,
         hasSavedWarpConfig = initialSettings.savedWarpConf.isNotBlank(),
         hasSavedCustomWgConf = initialSettings.savedCustomWgConf.isNotBlank(),
+        warpConfigDecryptFailed = initialSettings.warpConfigDecryptFailed,
+        customWgConfigDecryptFailed = initialSettings.customWgConfigDecryptFailed,
+        statusMessage =
+          if (decryptFailed) "Saved WireGuard config could not be decrypted — please re-import"
+          else it.statusMessage,
       )
     }
 
@@ -107,6 +125,32 @@ class VpnProxyCoordinator(
 
   fun toggleAutoWireGuardOnLaunch(enabled: Boolean) {
     scope.launch { repository.preferences.setAutoWireGuardOnLaunch(enabled) }
+  }
+
+  fun toggleWireGuardKillSwitch(enabled: Boolean) {
+    scope.launch { repository.preferences.setWireGuardKillSwitch(enabled) }
+    if (!enabled && _vpnRelayState.value.isKillSwitchTripped) {
+      resetKillSwitch()
+    }
+  }
+
+  fun resetKillSwitch() {
+    onKillSwitchBlockingChanged(false)
+    speedEngine.setActiveProxy(null)
+    if (_vpnRelayState.value.activeRelay == null) {
+      relayManager.clearWebViewProxy {}
+    }
+    _vpnRelayState.update {
+      it.copy(
+        isKillSwitchTripped = false,
+        statusMessage = "VPN Kill Switch cleared — direct browsing restored.",
+      )
+    }
+    onShowMessage("Kill Switch cleared")
+  }
+
+  fun markPublicProxyWarned() {
+    scope.launch { repository.preferences.setPublicProxyWarned(true) }
   }
 
   fun toggleAutoProxyOnLaunch(enabled: Boolean) {
@@ -159,13 +203,21 @@ class VpnProxyCoordinator(
         )
       }
       val existingConf = settingsFlow.value.savedWarpConf
+      var warpSavedOnDisk = existingConf.isNotBlank()
+      var cipherErrorMessage: String? = null
       val confResult =
         if (existingConf.isNotBlank()) {
           Result.success(existingConf)
         } else {
           wireGuardManager.registerCloudflareWarpConfig().also { result ->
             result.getOrNull()?.let { freshConf ->
-              repository.preferences.saveWarpConfig(freshConf)
+              runCatching { repository.preferences.saveWarpConfig(freshConf) }
+                .onSuccess { warpSavedOnDisk = true }
+                .onFailure { err ->
+                  warpSavedOnDisk = false
+                  cipherErrorMessage =
+                    "Android Keystore unavailable: WARP config could not be saved securely (${err.message ?: "cipher error"})"
+                }
             }
           }
         }
@@ -189,38 +241,62 @@ class VpnProxyCoordinator(
       if (connectResult.isFailure && existingConf.isNotBlank()) {
         val fresh = wireGuardManager.registerCloudflareWarpConfig().getOrNull()
         if (fresh != null) {
-          repository.preferences.saveWarpConfig(fresh)
+          runCatching { repository.preferences.saveWarpConfig(fresh) }
+            .onSuccess { warpSavedOnDisk = true }
+            .onFailure { err ->
+              warpSavedOnDisk = false
+              cipherErrorMessage =
+                "Android Keystore unavailable: WARP config could not be saved securely (${err.message ?: "cipher error"})"
+            }
           connectResult = wireGuardManager.connect(fresh, "Cloudflare WARP")
         }
       }
 
       connectResult.fold(
         onSuccess = { info ->
+          expectedWireGuardDisconnect = false
+          if (_vpnRelayState.value.isKillSwitchTripped) {
+            onKillSwitchBlockingChanged(false)
+            relayManager.clearWebViewProxy {}
+            speedEngine.setActiveProxy(null)
+          }
           _vpnRelayState.update {
             it.copy(
               isWireGuardActive = true,
               isWireGuardConnecting = false,
+              isKillSwitchTripped = false,
               wireGuardMode = WireGuardMode.WARP_FREE,
               wireGuardProfileName = info.profileName,
               wireGuardEndpoint = info.endpoint,
-              hasSavedWarpConfig = true,
-              statusMessage = "Cloudflare WARP WireGuard active (${info.endpoint})",
+              hasSavedWarpConfig = warpSavedOnDisk,
+              warpConfigDecryptFailed = false,
+              statusMessage =
+                cipherErrorMessage ?: "Cloudflare WARP WireGuard active (${info.endpoint})",
             )
           }
           startWireGuardStatsPolling()
           delay(350L)
           refreshExitIp()
-          if (!silentStartup) onShowMessage("Cloudflare WARP WireGuard connected")
+          if (cipherErrorMessage != null) {
+            onShowMessage(cipherErrorMessage!!)
+          } else if (!silentStartup) {
+            onShowMessage("Cloudflare WARP WireGuard connected")
+          }
         },
         onFailure = { err ->
           _vpnRelayState.update {
             it.copy(
               isWireGuardActive = false,
               isWireGuardConnecting = false,
-              statusMessage = "WireGuard failed: ${err.message ?: "VPN permission needed"}",
+              statusMessage =
+                cipherErrorMessage ?: "WireGuard failed: ${err.message ?: "VPN permission needed"}",
             )
           }
-          if (!silentStartup) onShowMessage("Failed to start WireGuard tunnel")
+          if (cipherErrorMessage != null) {
+            onShowMessage(cipherErrorMessage!!)
+          } else if (!silentStartup) {
+            onShowMessage("Failed to start WireGuard tunnel")
+          }
         },
       )
     }
@@ -265,52 +341,78 @@ class VpnProxyCoordinator(
           statusMessage = "Starting $profileName...",
         )
       }
+      var customSavedOnDisk = settingsFlow.value.savedCustomWgConf.isNotBlank()
+      var cipherErrorMessage: String? = null
       if (persistConfig) {
-        repository.preferences.saveCustomWireGuardConfig(rawConf.trim(), profileName.trim())
+        runCatching {
+          repository.preferences.saveCustomWireGuardConfig(rawConf.trim(), profileName.trim())
+        }.onSuccess {
+          customSavedOnDisk = true
+        }.onFailure { err ->
+          customSavedOnDisk = settingsFlow.value.savedCustomWgConf.isNotBlank()
+          cipherErrorMessage =
+            "Android Keystore unavailable: config could not be saved securely (${err.message ?: "cipher error"})"
+        }
       } else {
         repository.preferences.setPreferredWireGuardMode(WireGuardMode.CUSTOM_CONF)
       }
 
       wireGuardManager.connect(rawConf, profileName).fold(
         onSuccess = { info ->
+          expectedWireGuardDisconnect = false
+          if (_vpnRelayState.value.isKillSwitchTripped) {
+            onKillSwitchBlockingChanged(false)
+            relayManager.clearWebViewProxy {}
+            speedEngine.setActiveProxy(null)
+          }
           _vpnRelayState.update {
             it.copy(
               isWireGuardActive = true,
               isWireGuardConnecting = false,
+              isKillSwitchTripped = false,
               wireGuardMode = WireGuardMode.CUSTOM_CONF,
               wireGuardProfileName = info.profileName,
               wireGuardEndpoint = info.endpoint,
-              hasSavedCustomWgConf = true,
-              statusMessage = "$profileName active (${info.endpoint})",
+              hasSavedCustomWgConf = customSavedOnDisk,
+              customWgConfigDecryptFailed = false,
+              statusMessage = cipherErrorMessage ?: "$profileName active (${info.endpoint})",
             )
           }
           startWireGuardStatsPolling()
           delay(350L)
           refreshExitIp()
-          onShowMessage("$profileName connected")
+          onShowMessage(cipherErrorMessage ?: "$profileName connected")
         },
         onFailure = { err ->
           _vpnRelayState.update {
             it.copy(
               isWireGuardActive = false,
               isWireGuardConnecting = false,
-              statusMessage = "WireGuard error: ${err.message ?: "Unable to connect"}",
+              statusMessage =
+                cipherErrorMessage ?: "WireGuard error: ${err.message ?: "Unable to connect"}",
             )
           }
-          onShowMessage("WireGuard error: ${err.message ?: "Unable to connect"}")
+          onShowMessage(cipherErrorMessage ?: "WireGuard error: ${err.message ?: "Unable to connect"}")
         },
       )
     }
   }
 
   fun disconnectWireGuard(silent: Boolean = false) {
+    expectedWireGuardDisconnect = true
     stopWireGuardStatsPolling()
     scope.launch {
       wireGuardManager.disconnect()
+      if (_vpnRelayState.value.isKillSwitchTripped) {
+        onKillSwitchBlockingChanged(false)
+        relayManager.clearWebViewProxy {}
+        speedEngine.setActiveProxy(null)
+      }
       _vpnRelayState.update {
         it.copy(
           isWireGuardActive = false,
           isWireGuardConnecting = false,
+          isKillSwitchTripped = false,
           wireGuardMode = WireGuardMode.NONE,
           wireGuardProfileName = "",
           wireGuardEndpoint = "",
@@ -326,6 +428,24 @@ class VpnProxyCoordinator(
     }
   }
 
+  private fun tripWireGuardKillSwitch() {
+    onKillSwitchBlockingChanged(true)
+    onStopAllWebViewLoads()
+    relayManager.applyKillSwitchDeadProxy {}
+    speedEngine.setActiveProxy(
+      java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", 9))
+    )
+    _vpnRelayState.update {
+      it.copy(
+        isWireGuardActive = false,
+        isKillSwitchTripped = true,
+        wireGuardMode = WireGuardMode.NONE,
+        statusMessage = "VPN tunnel dropped — Kill Switch blocking all browser traffic.",
+      )
+    }
+    onShowMessage("VPN dropped! Kill Switch blocking traffic")
+  }
+
   private fun startWireGuardStatsPolling() {
     wireGuardStatsJob?.cancel()
     wireGuardStatsJob =
@@ -333,9 +453,21 @@ class VpnProxyCoordinator(
         while (true) {
           val up = wireGuardManager.isTunnelActiveNow()
           if (!up) {
-            _vpnRelayState.update {
-              if (it.isWireGuardActive) it.copy(isWireGuardActive = false, wireGuardMode = WireGuardMode.NONE)
-              else it
+            val unexpectedDrop = !expectedWireGuardDisconnect && _vpnRelayState.value.isWireGuardActive
+            if (unexpectedDrop && settingsFlow.value.wireGuardKillSwitchEnabled) {
+              tripWireGuardKillSwitch()
+            } else {
+              _vpnRelayState.update {
+                if (it.isWireGuardActive) {
+                  it.copy(
+                    isWireGuardActive = false,
+                    wireGuardMode = WireGuardMode.NONE,
+                    statusMessage = "WireGuard VPN disconnected.",
+                  )
+                } else {
+                  it
+                }
+              }
             }
             break
           }
@@ -369,6 +501,7 @@ class VpnProxyCoordinator(
   fun startDnsVpnService() {
     scope.launch {
       if (_vpnRelayState.value.isWireGuardActive) {
+        expectedWireGuardDisconnect = true
         stopWireGuardStatsPolling()
         wireGuardManager.disconnect()
         _vpnRelayState.update {
@@ -381,6 +514,12 @@ class VpnProxyCoordinator(
             wireGuardTxBytes = 0L,
           )
         }
+      }
+      if (_vpnRelayState.value.isKillSwitchTripped) {
+        onKillSwitchBlockingChanged(false)
+        relayManager.clearWebViewProxy {}
+        speedEngine.setActiveProxy(null)
+        _vpnRelayState.update { it.copy(isKillSwitchTripped = false) }
       }
       val provider = _vpnRelayState.value.activeDohProvider
       val intent =
@@ -610,7 +749,9 @@ class VpnProxyCoordinator(
   }
 
   fun shutdownAndWipeState() {
+    expectedWireGuardDisconnect = true
     stopWireGuardStatsPolling()
+    onKillSwitchBlockingChanged(false)
     if (VoltVpnService.runtimeStats.value.isRunning) {
       runCatching {
         app.startService(Intent(app, VoltVpnService::class.java).apply { action = VoltVpnService.ACTION_STOP })
@@ -624,6 +765,7 @@ class VpnProxyCoordinator(
   }
 
   suspend fun disconnectWireGuardBlocking() {
+    expectedWireGuardDisconnect = true
     runCatching { wireGuardManager.disconnect() }
   }
 }

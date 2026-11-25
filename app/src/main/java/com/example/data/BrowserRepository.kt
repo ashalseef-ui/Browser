@@ -9,10 +9,12 @@ class BrowserRepository(
   private val bookmarkDao = database.bookmarkDao()
   private val historyDao = database.historyDao()
   private val downloadDao = database.downloadDao()
+  private val sitePermissionDao = database.sitePermissionDao()
 
   val allBookmarks: Flow<List<BookmarkEntity>> = bookmarkDao.observeAllBookmarks()
   val speedDialBookmarks: Flow<List<BookmarkEntity>> = bookmarkDao.observeSpeedDial()
   val downloads: Flow<List<DownloadItemEntity>> = downloadDao.observeDownloads()
+  val sitePermissions: Flow<List<SitePermissionEntity>> = sitePermissionDao.observeAll()
   val settings: Flow<BrowserSettings> = preferences.settings
 
   fun observeIsBookmarked(url: String): Flow<Boolean> = bookmarkDao.observeIsBookmarked(url)
@@ -74,10 +76,34 @@ class BrowserRepository(
 
   suspend fun deleteDownload(id: Long) = downloadDao.deleteById(id)
 
+  suspend fun getSitePermissionsSnapshot(): List<SitePermissionEntity> =
+    sitePermissionDao.getAllSnapshot()
+
+  suspend fun saveSitePermission(host: String, type: SitePermissionType, granted: Boolean) {
+    if (host.isBlank()) return
+    sitePermissionDao.upsert(
+      SitePermissionEntity(
+        host = host,
+        permissionType = type.name,
+        granted = granted,
+        updatedAt = System.currentTimeMillis(),
+      )
+    )
+  }
+
+  suspend fun clearSitePermissionsForHost(host: String) {
+    if (host.isNotBlank()) sitePermissionDao.deleteForHost(host)
+  }
+
+  suspend fun clearAllSitePermissions() {
+    sitePermissionDao.clearAll()
+  }
+
   suspend fun wipeAllPersistedData() {
     historyDao.clearAll()
     downloadDao.clearAll()
     bookmarkDao.clearAll()
+    sitePermissionDao.clearAll()
     preferences.clearAll()
   }
 }

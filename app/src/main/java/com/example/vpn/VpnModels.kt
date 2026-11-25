@@ -83,6 +83,9 @@ data class PublicRelayNode(
   val hasAuthentication: Boolean
     get() = !username.isNullOrBlank()
 
+  val isPublicFreeRelay: Boolean
+    get() = !hasAuthentication && source != "Custom" && source != "Private Auth"
+
   val isPreferredRegion: Boolean
     get() = countryCode.equals("DE", ignoreCase = true) || countryCode.equals("IN", ignoreCase = true)
 }
@@ -90,6 +93,7 @@ data class PublicRelayNode(
 data class VpnTunnelState(
   val isWireGuardActive: Boolean = false,
   val isWireGuardConnecting: Boolean = false,
+  val isKillSwitchTripped: Boolean = false,
   val wireGuardMode: WireGuardMode = WireGuardMode.NONE,
   val wireGuardProfileName: String = "",
   val wireGuardEndpoint: String = "",
@@ -97,6 +101,8 @@ data class VpnTunnelState(
   val wireGuardTxBytes: Long = 0L,
   val hasSavedWarpConfig: Boolean = false,
   val hasSavedCustomWgConf: Boolean = false,
+  val warpConfigDecryptFailed: Boolean = false,
+  val customWgConfigDecryptFailed: Boolean = false,
   val isDnsVpnActive: Boolean = false,
   val isDnsVpnConnecting: Boolean = false,
   val activeDohProvider: DohProvider = DohProvider.CLOUDFLARE,
