@@ -271,6 +271,15 @@ class FirefoxAddonManager(
     }
   }
 
+  fun requestMediaRescan() {
+    val port = bridgePort ?: return
+    scope.launch(Dispatchers.Main) {
+      runCatching {
+        port.postMessage(JSONObject().put("type", "rescanMedia"))
+      }
+    }
+  }
+
   fun syncRuntimeSettings(settings: BrowserSettings) {
     val rt = runtime ?: return
     scope.launch(Dispatchers.Main) {
@@ -606,6 +615,9 @@ class FirefoxAddonManager(
   }
 
   fun clearAllStorage() {
+    runCatching {
+      File(context.cacheDir, "xpi_imports").deleteRecursively()
+    }
     val rt = runtime ?: return
     scope.launch(Dispatchers.Main) {
       runCatching {
@@ -692,11 +704,19 @@ class FirefoxAddonManager(
     fun resolveAmoXpiUrl(rawInput: String?): String? {
       val trimmed = rawInput?.trim().orEmpty()
       if (trimmed.isEmpty()) return null
-      if (isXpiUrl(trimmed)) return trimmed
+      val withScheme =
+        if (!trimmed.contains("://") &&
+          trimmed.startsWith("addons.mozilla.org", ignoreCase = true)
+        ) {
+          "https://$trimmed"
+        } else {
+          trimmed
+        }
+      if (isXpiUrl(withScheme)) return withScheme
 
       val amoPageRegex =
         Regex("^https?://addons\\.mozilla\\.org/(?:[^/]+/)?(?:firefox|android)/addon/([^/?#]+)/?.*", RegexOption.IGNORE_CASE)
-      val match = amoPageRegex.find(trimmed)
+      val match = amoPageRegex.find(withScheme)
       if (match != null) {
         val slug = match.groupValues[1].trim()
         if (slug.isNotBlank()) {
@@ -704,10 +724,10 @@ class FirefoxAddonManager(
         }
       }
 
-      if ((trimmed.startsWith("https://", true) || trimmed.startsWith("http://", true)) &&
-        trimmed.contains("addons.mozilla.org/firefox/downloads/", ignoreCase = true)
+      if ((withScheme.startsWith("https://", true) || withScheme.startsWith("http://", true)) &&
+        withScheme.contains("addons.mozilla.org/firefox/downloads/", ignoreCase = true)
       ) {
-        return trimmed
+        return withScheme
       }
       return null
     }

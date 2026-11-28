@@ -865,6 +865,12 @@ class ExampleRobolectricTest {
         "https://addons.mozilla.org/android/addon/darkreader/?utm_source=amo"
       ),
     )
+    assertEquals(
+      "https://addons.mozilla.org/firefox/downloads/latest/sponsorblock/addon-sponsorblock-latest.xpi",
+      com.example.browser.FirefoxAddonManager.resolveAmoXpiUrl(
+        "addons.mozilla.org/en-US/firefox/addon/sponsorblock"
+      ),
+    )
     assertNull(com.example.browser.FirefoxAddonManager.resolveAmoXpiUrl("not a url"))
 
     val context = ApplicationProvider.getApplicationContext<Context>()

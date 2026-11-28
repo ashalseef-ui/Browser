@@ -1083,6 +1083,8 @@ class WebViewTabPool(
       return mediaCompatBypassHosts.contains(key)
     }
 
+    fun getMediaCompatBypassedHosts(): Set<String> = mediaCompatBypassHosts.toSet()
+
     fun setHostAdBlockPaused(urlOrHost: String?, paused: Boolean) {
       val key = normalizeHostKey(urlOrHost)
       if (key.isEmpty()) return

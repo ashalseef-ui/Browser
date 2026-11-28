@@ -74,4 +74,12 @@
   if (document.documentElement) {
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
+  try {
+    browser.runtime.onMessage.addListener((msg) => {
+      if (msg && msg.type === "rescanMedia") {
+        lastSentKey = "";
+        scanMedia();
+      }
+    });
+  } catch (_) {}
 })();

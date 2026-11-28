@@ -158,8 +158,7 @@ class GeckoTabPool(
 
     val runtime = addonManager.ensureRuntime(currentSettings)
     val initialOverride = siteHostOverrides[WebContextTargetResolver.normalizeHostKey(fallbackUrl)]
-    val (_, effectiveDesktop) = VoltSpeedEngine.resolveEffectiveSiteSettings(currentSettings, initialOverride)
-    val effectiveJs = initialOverride?.jsEnabled ?: true
+    val (effectiveJs, effectiveDesktop) = VoltSpeedEngine.resolveEffectiveSiteSettings(currentSettings, initialOverride)
 
     val sessionSettings =
       GeckoSessionSettings.Builder()
@@ -236,6 +235,12 @@ class GeckoTabPool(
           session: GeckoSession,
           uri: String,
         ): GeckoResult<GeckoSession> {
+          if (FirefoxAddonManager.isXpiUrl(uri)) {
+            mainScope.launch(Dispatchers.Main) {
+              onXpiIntercepted?.invoke(uri) ?: addonManager.installFromUrl(uri, currentSettings)
+            }
+            return GeckoResult.fromValue(null)
+          }
           val newTabId = callbacks.onCreatePopupTabRequested(isIncognito || tabId in incognitoTabIds)
             ?: return GeckoResult.fromValue(null)
           val newSession =

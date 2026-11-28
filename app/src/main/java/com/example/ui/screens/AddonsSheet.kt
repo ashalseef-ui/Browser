@@ -414,7 +414,7 @@ private fun InstalledAddonCard(
         1.dp,
         if (addon.enabled) voltColors.emeraldShield.copy(alpha = 0.45f) else voltColors.cardBorder,
       ),
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier.fillMaxWidth().testTag("addon_card_${addon.id}"),
   ) {
     Column(
       modifier = Modifier.padding(14.dp),
@@ -472,8 +472,10 @@ private fun InstalledAddonCard(
               else voltColors.cardBorder,
             ),
           modifier =
-            Modifier.clip(RoundedCornerShape(100.dp))
-              .clickable { onTogglePrivate(!addon.allowedInPrivateBrowsing) },
+            Modifier.minimumInteractiveComponentSize()
+              .clip(RoundedCornerShape(100.dp))
+              .clickable { onTogglePrivate(!addon.allowedInPrivateBrowsing) }
+              .testTag("addon_private_toggle_${addon.id}"),
         ) {
           Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -496,24 +498,30 @@ private fun InstalledAddonCard(
           }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
           if (addon.hasBrowserAction && addon.enabled) {
             OutlinedButton(
               onClick = onOpenPopup,
               contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-              modifier = Modifier.height(34.dp),
+              modifier = Modifier.minimumInteractiveComponentSize().testTag("addon_open_popup_${addon.id}"),
             ) {
               Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
               Spacer(modifier = Modifier.width(4.dp))
               Text("Open UI", style = MaterialTheme.typography.labelSmall)
             }
           }
-          IconButton(onClick = onUninstall, modifier = Modifier.size(36.dp)) {
+          IconButton(
+            onClick = onUninstall,
+            modifier = Modifier.minimumInteractiveComponentSize().testTag("addon_uninstall_${addon.id}"),
+          ) {
             Icon(
               imageVector = Icons.Default.DeleteOutline,
               contentDescription = "Uninstall ${addon.name}",
               tint = MaterialTheme.colorScheme.error,
-              modifier = Modifier.size(18.dp),
+              modifier = Modifier.size(20.dp),
             )
           }
         }
@@ -601,7 +609,7 @@ private fun CatalogAddonCard(
           onClick = onInstall,
           enabled = !isInstalling,
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-          modifier = Modifier.minimumInteractiveComponentSize(),
+          modifier = Modifier.minimumInteractiveComponentSize().testTag("catalog_install_${item.slug}"),
         ) {
           Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
           Spacer(modifier = Modifier.width(4.dp))
@@ -757,6 +765,9 @@ fun AddonPopupDialog(
               gv.releaseSession()
               gv.setSession(popup.session)
             }
+          },
+          onRelease = { gv ->
+            gv.releaseSession()
           },
           modifier = Modifier.fillMaxWidth().weight(1f),
         )

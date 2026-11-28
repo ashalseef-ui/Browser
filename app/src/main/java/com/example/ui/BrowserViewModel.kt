@@ -573,7 +573,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       proxyPort = proxyPort,
       proxyUsername = auth?.username ?: relay?.username.orEmpty(),
       proxyPassword = auth?.password ?: relay?.password.orEmpty(),
-      bypassedHosts = emptySet(),
+      bypassedHosts = WebViewTabPool.getMediaCompatBypassedHosts(),
     )
   }
 
@@ -660,6 +660,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     if (host.isEmpty()) return
     val nextEnabled = !WebViewTabPool.isHostMediaCompatBypassed(current.url)
     WebViewTabPool.setHostMediaCompatBypass(current.url, nextEnabled)
+    syncGeckoBridgeState()
     updateTab(current.id) { it.copy(isMediaCompatBypassEnabled = nextEnabled) }
     webViewPool.findWebView(current.id)?.let { wv ->
       wv.clearCache(true)
@@ -751,6 +752,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     if (host.isEmpty()) return
     WebViewTabPool.setHostMediaCompatBypass(current.url, false)
     WebViewTabPool.setHostAdBlockPaused(current.url, false)
+    syncGeckoBridgeState()
     webViewPool.syncAdBlockerScripts()
     updateTab(current.id) {
       it.copy(
@@ -1235,7 +1237,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       return
     }
     mediaSnifferCoordinator.resetTab(tab.id)
-    webViewPool.triggerMediaScan(tab.id)
+    if (isGeckoActive) {
+      firefoxAddonManager.requestMediaRescan()
+    } else {
+      webViewPool.triggerMediaScan(tab.id)
+    }
     requeryAllMediaSizes()
     showMessage("Scanning page for downloadable videos (> 1 MB)...")
   }
@@ -1457,24 +1463,39 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun installAddonFromUrl(rawUrl: String) {
-    if (!isGeckoActive) {
-      setEngineMode(BrowserEngineMode.GECKO)
-    }
-    firefoxAddonManager.installFromUrl(rawUrl, settings.value)
+    val effectiveSettings =
+      if (!isGeckoActive) {
+        setEngineMode(BrowserEngineMode.GECKO)
+        settings.value.copy(engineMode = BrowserEngineMode.GECKO)
+      } else {
+        settings.value
+      }
+    firefoxAddonManager.installFromUrl(rawUrl, effectiveSettings)
   }
 
   fun installAddonFromUri(uri: Uri) {
-    if (!isGeckoActive) {
-      setEngineMode(BrowserEngineMode.GECKO)
-    }
-    firefoxAddonManager.installFromContentUri(uri, settings.value)
+    val effectiveSettings =
+      if (!isGeckoActive) {
+        setEngineMode(BrowserEngineMode.GECKO)
+        settings.value.copy(engineMode = BrowserEngineMode.GECKO)
+      } else {
+        settings.value
+      }
+    firefoxAddonManager.installFromContentUri(uri, effectiveSettings)
   }
 
   fun openAmoStore() {
+    val amoUrl = "https://addons.mozilla.org/en-US/firefox/"
     if (!isGeckoActive) {
-      setEngineMode(BrowserEngineMode.GECKO)
+      viewModelScope.launch {
+        repository.preferences.setEngineMode(BrowserEngineMode.GECKO)
+        settings.first { it.engineMode == BrowserEngineMode.GECKO }
+        firefoxAddonManager.refreshAddons(settings.value)
+        navigate(amoUrl)
+      }
+    } else {
+      navigate(amoUrl)
     }
-    navigate("https://addons.mozilla.org/en-US/firefox/")
   }
 
   fun respondToAddonInstallPrompt(allow: Boolean, allowPrivate: Boolean) {
@@ -1700,6 +1721,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     runCatching { app.stopService(Intent(app, VoltMediaService::class.java)) }
 
     vpnCoordinator.shutdownAndWipeState()
+    firefoxAddonManager.respondToInstallPrompt(allow = false, allowPrivate = false)
+    firefoxAddonManager.closeAddonPopup()
     webViewPool.destroyAllTabs()
     geckoTabPool.destroyAllTabs()
     geckoTabPool.wipeAllSessionData()

@@ -21,6 +21,14 @@ function connectNativeBridge() {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "syncState" && msg.state) {
         bridgeState = Object.assign({}, bridgeState, msg.state);
+      } else if (msg.type === "rescanMedia" && browser.tabs && browser.tabs.query) {
+        browser.tabs.query({ active: true }).then((tabs) => {
+          (tabs || []).forEach((t) => {
+            if (t && t.id != null) {
+              browser.tabs.sendMessage(t.id, { type: "rescanMedia" }).catch(() => {});
+            }
+          });
+        }).catch(() => {});
       }
     });
     nativePort.onDisconnect.addListener(() => {
