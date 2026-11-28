@@ -102,7 +102,6 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.androidx.webkit)
   implementation(libs.androidx.work.runtime.ktx)
-  implementation(libs.mozilla.geckoview)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.exoplayer.hls)
   implementation(libs.androidx.media3.exoplayer.dash)

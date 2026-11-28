@@ -17,7 +17,6 @@ private val Context.voltDataStore by preferencesDataStore(name = "volt_browser_p
 class VoltPreferences(private val context: Context) {
 
   private object Keys {
-    val ENGINE_MODE = stringPreferencesKey("browser_engine_mode")
     val TURBO_SHIELD = booleanPreferencesKey("turbo_shield_enabled")
     val AD_BLOCKER_TYPE = stringPreferencesKey("ad_blocker_type")
     val LITE_MODE = booleanPreferencesKey("lite_mode_enabled")
@@ -74,12 +73,7 @@ class VoltPreferences(private val context: Context) {
       val decryptedCustomWg =
         if (rawCustomWg.isBlank()) "" else SecureConfigCipher.decrypt(rawCustomWg)
 
-      val engineModeName = prefs[Keys.ENGINE_MODE] ?: BrowserEngineMode.GECKO.name
-      val engineMode =
-        BrowserEngineMode.entries.firstOrNull { it.name == engineModeName } ?: BrowserEngineMode.GECKO
-
       BrowserSettings(
-        engineMode = engineMode,
         turboShieldEnabled = blockerType != AdBlockerType.OFF,
         adBlockerType = blockerType,
         liteModeEnabled = prefs[Keys.LITE_MODE] ?: false,
@@ -107,10 +101,6 @@ class VoltPreferences(private val context: Context) {
         measuredPageCount = prefs[Keys.MEASURED_PAGES] ?: 0,
       )
     }
-
-  suspend fun setEngineMode(mode: BrowserEngineMode) {
-    context.voltDataStore.edit { it[Keys.ENGINE_MODE] = mode.name }
-  }
 
   suspend fun setAdBlockerType(type: AdBlockerType) {
     context.voltDataStore.edit {

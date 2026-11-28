@@ -24,12 +24,6 @@
 -keep class * extends androidx.work.CoroutineWorker { *; }
 -keep class * extends androidx.work.Worker { *; }
 
-# Mozilla GeckoView & JNI bridge
--keep class org.mozilla.geckoview.** { *; }
--keep class org.mozilla.gecko.** { *; }
--dontwarn org.mozilla.geckoview.**
--dontwarn org.mozilla.gecko.**
-
 # Transitive snakeyaml optional JavaBeans classes unavailable on Android
 -dontwarn java.beans.BeanInfo
 -dontwarn java.beans.FeatureDescriptor
