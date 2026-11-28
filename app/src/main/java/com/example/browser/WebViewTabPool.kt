@@ -21,9 +21,11 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
 import androidx.webkit.ProfileStore
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 
+import com.example.data.AdBlockerType
 import com.example.data.BrowserSettings
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
@@ -93,6 +95,8 @@ class WebViewTabPool(
   private val savedStateBundles = HashMap<String, Bundle>()
   private val incognitoTabIds = HashSet<String>()
   private val appliedWebSettings = HashMap<String, AppliedWebSettings>()
+  private val documentStartScriptHandlers = HashMap<String, ScriptHandler>()
+  private val appliedDocScriptSignatures = HashMap<String, String>()
   private val pageStartTimestamps = HashMap<String, Long>()
   private val currentUrls = HashMap<String, String>()
   private val currentTitles = HashMap<String, String>()
@@ -199,6 +203,7 @@ class WebViewTabPool(
         )
         appliedWebSettings[tabId] = target
       }
+      installOrUpdateDocumentStartScript(tabId, existing, override)
       return existing
     }
 
@@ -303,6 +308,20 @@ class WebViewTabPool(
             return true
           }
           val isMainFrame = request.isForMainFrame
+          val pageUrl = currentUrls[tabId].orEmpty()
+          val adBlockActiveForPage =
+            currentSettings.adBlockerType != AdBlockerType.OFF &&
+              !isHostAdBlockPaused(pageUrl) &&
+              !isHostMediaCompatBypassed(pageUrl)
+
+          if (adBlockActiveForPage &&
+            TurboShield.isNavigationAdBlocked(uri, currentSettings.adBlockerType, isMainFrame)
+          ) {
+            mainScope.launch(Dispatchers.Main) {
+              callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
+            }
+            return true
+          }
 
           if (url.startsWith("http://", ignoreCase = true)) {
             val host = normalizeHostKey(url)
@@ -343,7 +362,20 @@ class WebViewTabPool(
           val isMainFrame = request.isForMainFrame
           val pageUrl = currentUrls[tabId].orEmpty()
           val isSiteBypassed = isHostMediaCompatBypassed(pageUrl)
+          val isAdBlockPaused = isHostAdBlockPaused(pageUrl)
           val headers = request.requestHeaders.orEmpty()
+
+          if (!isMainFrame &&
+            !isSiteBypassed &&
+            !isAdBlockPaused &&
+            currentSettings.adBlockerType != AdBlockerType.OFF &&
+            TurboShield.shouldBlock(uri, currentSettings.adBlockerType)
+          ) {
+            mainScope.launch(Dispatchers.Main) {
+              callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
+            }
+            return TurboShield.blockedResponseForRequest(uri, headers)
+          }
 
           if (!isMainFrame && !isSiteBypassed && currentSettings.liteModeEnabled) {
             val (shouldBlockData, savedBytes) = VoltDataSaver.shouldBlockForDataSaver(uri, headers)
@@ -355,8 +387,6 @@ class WebViewTabPool(
               return VoltDataSaver.emptySaverResponse(isImage = isImage)
             }
           }
-
-
 
           val urlString = uri.toString()
           val pageTitle = currentTitles[tabId].orEmpty()
@@ -391,6 +421,17 @@ class WebViewTabPool(
             )
             appliedWebSettings[tabId] = target
           }
+          if (view != null) {
+            installOrUpdateDocumentStartScript(tabId, view, override)
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
+              override?.jsEnabled != false &&
+              !isHostAdBlockPaused(resolvedUrl) &&
+              !isHostMediaCompatBypassed(resolvedUrl)
+            ) {
+              TurboShield.documentStartScript(currentSettings.adBlockerType, adBlockPausedHosts)
+                ?.let { view.evaluateJavascript(it, null) }
+            }
+          }
           callbacks.onPageStarted(tabId, resolvedUrl)
         }
 
@@ -403,6 +444,15 @@ class WebViewTabPool(
           val startedAt = pageStartTimestamps.remove(tabId) ?: System.currentTimeMillis()
           val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
 
+          val siteOverride = getSiteOverrideForUrl(resolvedUrl)
+          if (siteOverride?.jsEnabled != false &&
+            !isHostAdBlockPaused(resolvedUrl) &&
+            !isHostMediaCompatBypassed(resolvedUrl)
+          ) {
+            TurboShield.cosmeticFilterScript(currentSettings.adBlockerType)?.let { script ->
+              view?.evaluateJavascript(script, null)
+            }
+          }
 
           view?.evaluateJavascript(MediaSniffer.domSnifferScript, null)
 
@@ -668,6 +718,37 @@ class WebViewTabPool(
             return false
           }
 
+          val pageUrl = currentUrls[tabId].orEmpty()
+          val adBlockActive =
+            currentSettings.adBlockerType != AdBlockerType.OFF &&
+              !isHostAdBlockPaused(pageUrl) &&
+              !isHostMediaCompatBypassed(pageUrl)
+          if (adBlockActive) {
+            val hitExtraUrl =
+              view?.hitTestResult?.let { hit ->
+                if (hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
+                  hit.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
+                ) {
+                  hit.extra
+                } else {
+                  null
+                }
+              }
+            val domLinkUrl =
+              lastDomTouchTargets[tabId]
+                ?.takeIf { System.currentTimeMillis() - it.first <= 1_500L }
+                ?.second
+                ?.linkUrl
+            val candidatePopupUrl = hitExtraUrl ?: domLinkUrl
+            if (!candidatePopupUrl.isNullOrBlank()) {
+              val popupUri = runCatching { Uri.parse(candidatePopupUrl) }.getOrNull()
+              if (TurboShield.isNavigationAdBlocked(popupUri, currentSettings.adBlockerType, isMainFrame = false)) {
+                callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
+                return false
+              }
+            }
+          }
+
           val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
           val popupIncognito = isIncognito || tabId in incognitoTabIds
           val newTabId = callbacks.onCreatePopupTabRequested(isIncognito = popupIncognito) ?: return false
@@ -750,6 +831,7 @@ class WebViewTabPool(
 
     webViews[tabId] = webView
     appliedWebSettings[tabId] = resolveAppliedWebSettings(currentSettings, initialOverride)
+    installOrUpdateDocumentStartScript(tabId, webView, initialOverride)
 
     val savedBundle = savedStateBundles.remove(tabId)
     val restored = if (savedBundle != null) webView.restoreState(savedBundle) != null else false
@@ -757,6 +839,34 @@ class WebViewTabPool(
       webView.loadUrl(fallbackUrl)
     }
     return webView
+  }
+
+  private fun installOrUpdateDocumentStartScript(
+    tabId: String,
+    webView: WebView,
+    siteOverride: SiteHostOverride?,
+  ) {
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+    val jsAllowed = siteOverride?.jsEnabled ?: true
+    val blockerType = if (jsAllowed) currentSettings.adBlockerType else AdBlockerType.OFF
+    val pausedSnapshot = adBlockPausedHosts.toSet()
+    val signature = "${blockerType.name}|${pausedSnapshot.sorted().joinToString(",")}"
+    if (appliedDocScriptSignatures[tabId] == signature) return
+
+    runCatching { documentStartScriptHandlers.remove(tabId)?.remove() }
+    appliedDocScriptSignatures[tabId] = signature
+
+    val script = TurboShield.documentStartScript(blockerType, pausedSnapshot) ?: return
+    runCatching {
+      val handler = WebViewCompat.addDocumentStartJavaScript(webView, script, setOf("*"))
+      documentStartScriptHandlers[tabId] = handler
+    }
+  }
+
+  fun syncAdBlockerScripts() {
+    webViews.forEach { (tabId, wv) ->
+      installOrUpdateDocumentStartScript(tabId, wv, getSiteOverrideForUrl(currentUrls[tabId]))
+    }
   }
 
   @OptIn(WebViewCompat.ExperimentalSaveState::class)
@@ -775,6 +885,8 @@ class WebViewTabPool(
     if (saved && !stateBundle.isEmpty) {
       savedStateBundles[evictId] = stateBundle
     }
+    runCatching { documentStartScriptHandlers.remove(evictId)?.remove() }
+    appliedDocScriptSignatures.remove(evictId)
     (wv.parent as? ViewGroup)?.removeView(wv)
     wv.stopLoading()
     speedEngine.wipeEphemeralCacheAndStorage(wv, wipeGlobalProfileStorage = false)
@@ -817,6 +929,7 @@ class WebViewTabPool(
         )
         appliedWebSettings[tabId] = target
       }
+      installOrUpdateDocumentStartScript(tabId, wv, override)
     }
   }
 
@@ -866,10 +979,12 @@ class WebViewTabPool(
   fun wipeAllCacheAndCookies() {
     savedStateBundles.clear()
     mediaCompatBypassHosts.clear()
+    adBlockPausedHosts.clear()
     httpsOnlyBypassedHosts.clear()
     publicProxyHttpBypassHosts.clear()
     sessionSitePermissions.clear()
     upgradedFromHttpTabs.clear()
+    syncAdBlockerScripts()
     webViews.values.forEach { speedEngine.wipeEphemeralCacheAndStorage(it, wipeGlobalProfileStorage = false) }
     wipePrivateProfileStorage()
     speedEngine.wipeEphemeralCacheAndStorage(null, wipeGlobalProfileStorage = true)
@@ -878,6 +993,8 @@ class WebViewTabPool(
   fun destroyTab(tabId: String) {
     savedStateBundles.remove(tabId)
     val wasIncognito = incognitoTabIds.remove(tabId)
+    runCatching { documentStartScriptHandlers.remove(tabId)?.remove() }
+    appliedDocScriptSignatures.remove(tabId)
     webViews.remove(tabId)?.let { wv ->
       (wv.parent as? ViewGroup)?.removeView(wv)
       wv.stopLoading()
@@ -903,6 +1020,9 @@ class WebViewTabPool(
     savedStateBundles.clear()
     incognitoTabIds.clear()
     mediaCompatBypassHosts.clear()
+    adBlockPausedHosts.clear()
+    documentStartScriptHandlers.clear()
+    appliedDocScriptSignatures.clear()
     wipeAllCacheAndCookies()
     appliedWebSettings.clear()
     pageStartTimestamps.clear()
@@ -946,6 +1066,7 @@ class WebViewTabPool(
     const val MAX_BLOB_DOWNLOAD_BYTES = 25 * 1024 * 1024
 
     private val mediaCompatBypassHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val adBlockPausedHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     fun normalizeHostKey(urlOrHost: String?): String =
       WebContextTargetResolver.normalizeHostKey(urlOrHost)
@@ -962,11 +1083,27 @@ class WebViewTabPool(
       return mediaCompatBypassHosts.contains(key)
     }
 
+    fun setHostAdBlockPaused(urlOrHost: String?, paused: Boolean) {
+      val key = normalizeHostKey(urlOrHost)
+      if (key.isEmpty()) return
+      if (paused) adBlockPausedHosts.add(key) else adBlockPausedHosts.remove(key)
+    }
+
+    fun isHostAdBlockPaused(urlOrHost: String?): Boolean {
+      val key = normalizeHostKey(urlOrHost)
+      if (key.isEmpty()) return false
+      return adBlockPausedHosts.contains(key)
+    }
+
     fun upgradeHttpToHttps(url: String): String =
       WebContextTargetResolver.upgradeHttpToHttps(url)
 
     fun clearMediaCompatBypassHosts() {
       mediaCompatBypassHosts.clear()
+    }
+
+    fun clearAdBlockPausedHosts() {
+      adBlockPausedHosts.clear()
     }
 
     fun shouldProvideProxyCredentials(challengeHost: String?, activeProxyHost: String?): Boolean =

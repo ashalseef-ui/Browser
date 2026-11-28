@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DarkMode
@@ -35,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -44,6 +48,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.AdBlockerType
 import com.example.data.BrowserSettings
 import com.example.data.BrowserTabState
 import com.example.ui.components.extractHost
@@ -51,8 +56,9 @@ import com.example.ui.components.formatBytes
 import com.example.ui.theme.LocalVoltColors
 
 /**
- * Modal bottom sheet presenting active connection security telemetry, global privacy toggles,
- * per-host overrides (JavaScript, Desktop Mode, Media Bypass), and instant session wipes.
+ * Modal bottom sheet presenting active connection security telemetry, Ad Remover tier controls,
+ * global privacy toggles, per-host overrides (Ad Remover pause, JavaScript, Desktop Mode, Media Bypass),
+ * and instant session wipes.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,9 +66,11 @@ fun SecurityTelemetrySheet(
   tab: BrowserTabState,
   settings: BrowserSettings,
   sessionDataUsedBytes: Long = 0L,
+  onSelectAdBlockerType: (AdBlockerType) -> Unit = {},
   onToggleLiteMode: (Boolean) -> Unit,
   onToggleHttpsOnly: (Boolean) -> Unit,
   onToggleDarkWeb: (Boolean) -> Unit,
+  onToggleSiteAdBlockPause: () -> Unit = {},
   onToggleSiteJs: () -> Unit = {},
   onToggleSiteDesktop: () -> Unit = {},
   onToggleSiteMediaBypass: () -> Unit = {},
@@ -75,6 +83,7 @@ fun SecurityTelemetrySheet(
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val siteHost = if (tab.isSpeedDial) "" else extractHost(tab.url)
   val effectiveSiteDesktop = tab.siteDesktopOverride ?: settings.desktopModeEnabled
+  val isAdShieldActive = settings.adBlockerType != AdBlockerType.OFF && !tab.isAdBlockPausedForSite
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -153,23 +162,125 @@ fun SecurityTelemetrySheet(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         TelemetryCard(
-          label = "SESSION DATA",
-          value = formatBytes(sessionDataUsedBytes),
-          tint = voltColors.brandAccent,
+          label = if (tab.isSpeedDial) "ADS BLOCKED" else "PAGE BLOCKED",
+          value =
+            if (tab.isSpeedDial) "${settings.cumulativeTrackersBlocked}"
+            else "${tab.trackersBlockedOnPage}",
+          tint = if (isAdShieldActive) voltColors.emeraldShield else voltColors.amberAccent,
           modifier = Modifier.weight(1f),
         )
         TelemetryCard(
           label = "SAVED TOTAL",
           value = formatBytes(settings.cumulativeBytesSaved),
-          tint = voltColors.emeraldShield,
+          tint = voltColors.brandAccent,
           modifier = Modifier.weight(1f),
         )
         TelemetryCard(
-          label = "LOAD TIME",
-          value = tab.lastLoadTimeMs?.let { "${it} ms" } ?: "—",
+          label = "SESSION DATA",
+          value = formatBytes(sessionDataUsedBytes),
           tint = voltColors.amberAccent,
           modifier = Modifier.weight(1f),
         )
+      }
+
+      // Ad Remover & Privacy Shield Card
+      val shieldCardTint =
+        when {
+          settings.adBlockerType == AdBlockerType.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+          tab.isAdBlockPausedForSite -> voltColors.amberAccent
+          else -> voltColors.emeraldShield
+        }
+      Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = voltColors.cardSurface,
+        border =
+          BorderStroke(
+            1.dp,
+            if (isAdShieldActive) voltColors.emeraldShield.copy(alpha = 0.45f)
+            else voltColors.cardBorder,
+          ),
+        modifier = Modifier.fillMaxWidth().testTag("ad_remover_card"),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(14.dp),
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Box(
+              modifier =
+                Modifier.size(36.dp)
+                  .clip(RoundedCornerShape(10.dp))
+                  .background(shieldCardTint.copy(alpha = 0.16f)),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Shield,
+                contentDescription = null,
+                tint = shieldCardTint,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Volt Ad Remover • ${settings.adBlockerType.displayName}",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+              Text(
+                text =
+                  if (tab.isAdBlockPausedForSite && !tab.isSpeedDial) {
+                    "Paused on $siteHost • ${settings.cumulativeTrackersBlocked} total blocked"
+                  } else {
+                    "${settings.adBlockerType.subtitle} • ${settings.cumulativeTrackersBlocked} total blocked"
+                  },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            AdBlockerType.entries.forEach { tier ->
+              val selected = settings.adBlockerType == tier
+              val chipShape = RoundedCornerShape(12.dp)
+              Surface(
+                shape = chipShape,
+                color =
+                  if (selected) voltColors.emeraldShield.copy(alpha = 0.18f)
+                  else voltColors.omniboxSurface,
+                border =
+                  BorderStroke(
+                    width = if (selected) 1.5.dp else 1.dp,
+                    color = if (selected) voltColors.emeraldShield else voltColors.cardBorder,
+                  ),
+                modifier =
+                  Modifier.minimumInteractiveComponentSize()
+                    .clip(chipShape)
+                    .clickable { onSelectAdBlockerType(tier) }
+                    .testTag("ad_blocker_tier_${tier.name.lowercase()}"),
+              ) {
+                Text(
+                  text = tier.displayName,
+                  style =
+                    MaterialTheme.typography.labelMedium.copy(
+                      fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                    ),
+                  color =
+                    if (selected) voltColors.emeraldShield
+                    else MaterialTheme.colorScheme.onSurface,
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+              }
+            }
+          }
+        }
       }
 
       // Global Privacy & Render Toggles
@@ -206,7 +317,7 @@ fun SecurityTelemetrySheet(
         }
       }
 
-      // Per-Site Overrides Card (JavaScript, Desktop Mode)
+      // Per-Site Overrides Card (Ad Remover Pause, JavaScript, Desktop Mode)
       Surface(
         shape = RoundedCornerShape(20.dp),
         color = voltColors.cardSurface,
@@ -227,7 +338,12 @@ fun SecurityTelemetrySheet(
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.weight(1f),
             )
-            if (!tab.isSpeedDial && (!tab.siteJsEnabled || tab.siteDesktopOverride != null || tab.isMediaCompatBypassEnabled)) {
+            if (!tab.isSpeedDial &&
+              (!tab.siteJsEnabled ||
+                tab.siteDesktopOverride != null ||
+                tab.isMediaCompatBypassEnabled ||
+                tab.isAdBlockPausedForSite)
+            ) {
               TextButton(
                 onClick = onResetSiteSettings,
                 modifier = Modifier.testTag("reset_site_settings_button"),
@@ -236,6 +352,22 @@ fun SecurityTelemetrySheet(
               }
             }
           }
+          SettingToggleRow(
+            icon = Icons.Default.Block,
+            title = "Ad Remover on This Site",
+            subtitle =
+              when {
+                tab.isSpeedDial -> "Open any website to allow ads on a specific host"
+                tab.isAdBlockPausedForSite -> "Paused for $siteHost (site allowlisted)"
+                settings.adBlockerType == AdBlockerType.OFF -> "Global Ad Remover is currently Off"
+                else -> "Active (${settings.adBlockerType.displayName}) on $siteHost"
+              },
+            checked = !tab.isAdBlockPausedForSite && settings.adBlockerType != AdBlockerType.OFF,
+            enabled = !tab.isSpeedDial && settings.adBlockerType != AdBlockerType.OFF,
+            onCheckedChange = { onToggleSiteAdBlockPause() },
+            switchTag = "site_adblock_switch",
+          )
+          HorizontalDivider(color = voltColors.cardBorder.copy(alpha = 0.6f))
           SettingToggleRow(
             icon = Icons.Default.Code,
             title = "JavaScript Execution",

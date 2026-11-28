@@ -162,9 +162,31 @@ data class BrowserTabState(
   val lastLoadTimeMs: Long? = null,
   val isSecure: Boolean = true,
   val isMediaCompatBypassEnabled: Boolean = false,
+  val isAdBlockPausedForSite: Boolean = false,
+  val siteJsEnabled: Boolean = true,
+  val siteDesktopOverride: Boolean? = null,
+  val httpsWarning: HttpsWarningState? = null,
   val detectedMedia: List<DetectedMediaItem> = emptyList(),
   val isScanningMedia: Boolean = false,
   val isSpeedDial: Boolean = true,
+)
+
+enum class SitePermissionType(val label: String) {
+  CAMERA("Camera"),
+  MICROPHONE("Microphone"),
+  LOCATION("Location"),
+}
+
+data class SiteHostOverride(
+  val jsEnabled: Boolean? = null,
+  val desktopMode: Boolean? = null,
+)
+
+data class HttpsWarningState(
+  val failedUrl: String,
+  val fallbackHttpUrl: String,
+  val reason: String,
+  val isPublicProxyWarning: Boolean = false,
 )
 
 enum class AppThemeMode(val displayName: String) {
@@ -177,17 +199,18 @@ enum class AdBlockerType(
   val badgeLabel: String,
   val subtitle: String,
 ) {
-  OFF("Disabled", "OFF", "No ad, tracker, or cosmetic filtering"),
-  STANDARD("Standard Shield", "STD", "Fast core ad & tracker domain blocklist"),
-  ADGUARD("AdGuard Filter", "ADG", "AdGuard network rules, telemetry & cosmetic ad hiding"),
-  STRICT("Strict Anti-Popup", "MAX", "AdGuard + popup traps, cookie nags & anti-adblock overlays"),
-  STEALTH("Stealth Mode", "STH", "Zero-trace stealth mode: DNT, GPC, anti-fingerprint & telemetry shield"),
+  OFF("Off", "OFF", "Ad & tracker filtering disabled"),
+  STANDARD("Standard", "STD", "Core ad networks & tracking pixels"),
+  ADGUARD("AdGuard", "ADG", "Network rules, JS surrogates, video ad skip & cosmetic hiding"),
+  STRICT("Strict", "MAX", "AdGuard + popunders, clickjack shields & cookie banners"),
+  STEALTH("Stealth", "STH", "Strict + DNT/GPC signals & URL tracking parameter strip"),
 }
 
 data class BrowserSettings(
-  val turboShieldEnabled: Boolean = false,
-  val adBlockerType: AdBlockerType = AdBlockerType.OFF,
+  val turboShieldEnabled: Boolean = true,
+  val adBlockerType: AdBlockerType = AdBlockerType.ADGUARD,
   val liteModeEnabled: Boolean = false,
+  val httpsOnlyEnabled: Boolean = false,
   val darkWebEnabled: Boolean = true,
   val desktopModeEnabled: Boolean = false,
   val autoWireGuardOnLaunchEnabled: Boolean = false,
@@ -195,6 +218,10 @@ data class BrowserSettings(
   val savedWarpConf: String = "",
   val savedCustomWgConf: String = "",
   val savedCustomWgName: String = "",
+  val warpConfigDecryptFailed: Boolean = false,
+  val customWgConfigDecryptFailed: Boolean = false,
+  val wireGuardKillSwitchEnabled: Boolean = false,
+  val hasSeenPublicProxyWarning: Boolean = false,
   val autoProxyOnLaunchEnabled: Boolean = false,
   val autoProxyFailoverEnabled: Boolean = true,
   val autoDnsVpnOnLaunchEnabled: Boolean = false,
@@ -229,5 +256,6 @@ data class WebContextMenuTarget(
   val hasAnyTarget: Boolean
     get() = !linkUrl.isNullOrBlank() || !imageUrl.isNullOrBlank() || !mediaUrl.isNullOrBlank()
 }
+
 
 

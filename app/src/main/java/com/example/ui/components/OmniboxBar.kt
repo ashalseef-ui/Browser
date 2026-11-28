@@ -82,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.AdBlockerType
 import com.example.data.BrowserTabState
 import com.example.data.SearchEngine
 import com.example.ui.theme.LocalVoltColors
@@ -96,6 +97,7 @@ fun OmniboxDock(
   previousTabTitle: String = "",
   nextTabTitle: String = "",
   searchEngine: SearchEngine,
+  adBlockerType: AdBlockerType = AdBlockerType.ADGUARD,
   isVpnActive: Boolean,
   showBottomNavControls: Boolean,
   onNavigate: (String, SearchEngine?) -> Unit,
@@ -347,15 +349,16 @@ fun OmniboxDock(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-          // Security / Session State Button (compact squircle inside capsule)
+          // Security / Ad Shield State Button (compact squircle inside capsule)
+          val adShieldOff = adBlockerType == AdBlockerType.OFF || tab.isAdBlockPausedForSite
           val shieldTint =
             when {
-              tab.isMediaCompatBypassEnabled -> voltColors.amberAccent
+              tab.isMediaCompatBypassEnabled || adShieldOff -> voltColors.amberAccent
               tab.isIncognito -> voltColors.incognitoAccent
               !tab.isSpeedDial && !tab.isSecure -> voltColors.amberAccent
               else -> voltColors.emeraldShield
             }
-          Box(
+          Row(
             modifier =
               Modifier.minimumInteractiveComponentSize()
                 .clip(RoundedCornerShape(14.dp))
@@ -363,7 +366,8 @@ fun OmniboxDock(
                 .clickable(onClick = onOpenSecuritySheet)
                 .padding(horizontal = 8.dp, vertical = 8.dp)
                 .testTag("security_shield_button"),
-            contentAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
             Icon(
               imageVector =
@@ -378,6 +382,15 @@ fun OmniboxDock(
               tint = shieldTint,
               modifier = Modifier.size(16.dp),
             )
+            if (!tab.isSpeedDial && tab.trackersBlockedOnPage > 0) {
+              Text(
+                text = if (tab.trackersBlockedOnPage > 99) "99+" else "${tab.trackersBlockedOnPage}",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                color = shieldTint,
+                maxLines = 1,
+                softWrap = false,
+              )
+            }
           }
 
           // Search Engine Pill (Tap = open tray, Swipe = cycle engine)

@@ -22,6 +22,7 @@ import com.example.browser.SocialHubHelper
 import com.example.browser.TabWebCallbacks
 import com.example.browser.VoltSpeedEngine
 import com.example.browser.WebViewTabPool
+import com.example.data.AdBlockerType
 import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserSettings
@@ -186,6 +187,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       override fun onPageStarted(tabId: String, url: String) {
         mediaSnifferCoordinator.resetTab(tabId)
         val isBypassed = WebViewTabPool.isHostMediaCompatBypassed(url)
+        val isAdBlockPaused = WebViewTabPool.isHostAdBlockPaused(url)
         val siteOverride = webViewPool.getSiteOverrideForUrl(url)
         updateTab(tabId) {
           it.copy(
@@ -195,6 +197,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isSpeedDial = false,
             isSecure = url.startsWith("https://", ignoreCase = true),
             isMediaCompatBypassEnabled = isBypassed,
+            isAdBlockPausedForSite = isAdBlockPaused,
             siteJsEnabled = siteOverride?.jsEnabled ?: true,
             siteDesktopOverride = siteOverride?.desktopMode,
             trackersBlockedOnPage = 0,
@@ -217,6 +220,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         var blockedCount = 0
         var bytesSaved = 0L
         val isBypassed = WebViewTabPool.isHostMediaCompatBypassed(url)
+        val isAdBlockPaused = WebViewTabPool.isHostAdBlockPaused(url)
         val siteOverride = webViewPool.getSiteOverrideForUrl(url)
 
         updateTab(tabId) { tab ->
@@ -233,6 +237,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isSpeedDial = false,
             isSecure = url.startsWith("https://", ignoreCase = true),
             isMediaCompatBypassEnabled = isBypassed,
+            isAdBlockPausedForSite = isAdBlockPaused,
             siteJsEnabled = siteOverride?.jsEnabled ?: true,
             siteDesktopOverride = siteOverride?.desktopMode,
           )
@@ -535,6 +540,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             progress = 5,
             isSecure = resolvedUrl.startsWith("https://", ignoreCase = true),
             isMediaCompatBypassEnabled = WebViewTabPool.isHostMediaCompatBypassed(resolvedUrl),
+            isAdBlockPausedForSite = WebViewTabPool.isHostAdBlockPaused(resolvedUrl),
             httpsWarning = null,
           )
         }
@@ -619,16 +625,41 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     )
   }
 
-  /** Clears per-site JS, Desktop Mode, Media Bypass, and permission decisions for the active host. */
+  fun toggleCurrentSiteAdBlockPause() {
+    val current = activeTab.value
+    if (current.isSpeedDial || current.url.isBlank()) {
+      showMessage("Open a website first to pause Ad Remover for a site")
+      return
+    }
+    val host = WebViewTabPool.normalizeHostKey(current.url)
+    if (host.isEmpty()) return
+    val nextPaused = !WebViewTabPool.isHostAdBlockPaused(current.url)
+    WebViewTabPool.setHostAdBlockPaused(current.url, nextPaused)
+    webViewPool.syncAdBlockerScripts()
+    updateTab(current.id) { it.copy(isAdBlockPausedForSite = nextPaused) }
+    webViewPool.findWebView(current.id)?.let { wv ->
+      wv.clearCache(true)
+      wv.reload()
+    }
+    showMessage(
+      if (nextPaused) "Ad Remover paused on $host"
+      else "Ad Remover resumed on $host"
+    )
+  }
+
+  /** Clears per-site JS, Desktop Mode, Media Bypass, Ad Remover pause, and permission decisions for the active host. */
   fun resetCurrentSiteSettings() {
     val current = activeTab.value
     if (current.isSpeedDial || current.url.isBlank()) return
     val host = WebViewTabPool.normalizeHostKey(current.url)
     if (host.isEmpty()) return
     WebViewTabPool.setHostMediaCompatBypass(current.url, false)
+    WebViewTabPool.setHostAdBlockPaused(current.url, false)
+    webViewPool.syncAdBlockerScripts()
     updateTab(current.id) {
       it.copy(
         isMediaCompatBypassEnabled = false,
+        isAdBlockPausedForSite = false,
         siteJsEnabled = true,
         siteDesktopOverride = null,
       )
@@ -1264,6 +1295,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
 
 
+  fun setAdBlockerType(type: AdBlockerType) {
+    viewModelScope.launch {
+      repository.preferences.setAdBlockerType(type)
+      val current = activeTab.value
+      if (!current.isSpeedDial && current.url.isNotBlank()) {
+        webViewPool.findWebView(current.id)?.reload()
+      }
+      showMessage(
+        if (type == AdBlockerType.OFF) "Ad Remover turned off"
+        else "Ad Remover: ${type.displayName} active"
+      )
+    }
+  }
+
   fun toggleLiteMode(enabled: Boolean) {
     viewModelScope.launch { repository.preferences.setLiteMode(enabled) }
   }
@@ -1441,6 +1486,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     vpnCoordinator.shutdownAndWipeState()
     webViewPool.destroyAllTabs()
     WebViewTabPool.clearMediaCompatBypassHosts()
+    WebViewTabPool.clearAdBlockPausedHosts()
     MediaSniffer.clearPlaybackContexts()
     DeviceTraceCleaner.wipeWebViewTraces(app)
 

@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.AdBlockerType
 import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserSettings
@@ -478,11 +480,21 @@ fun SpeedDialHome(
             tint = voltColors.amberAccent,
             modifier = Modifier.weight(1f),
           )
+          val shieldEnabled = settings.adBlockerType != AdBlockerType.OFF
           MetricTile(
-            icon = Icons.Default.Lock,
-            label = "HTTPS GUARD",
-            value = if (settings.httpsOnlyEnabled) "Strict" else "Standard",
-            tint = voltColors.emeraldShield,
+            icon = Icons.Default.Shield,
+            label = "AD SHIELD",
+            value =
+              if (shieldEnabled) {
+                if (settings.cumulativeTrackersBlocked > 0) {
+                  "${settings.adBlockerType.badgeLabel} • ${settings.cumulativeTrackersBlocked}"
+                } else {
+                  settings.adBlockerType.displayName
+                }
+              } else {
+                "Off"
+              },
+            tint = if (shieldEnabled) voltColors.emeraldShield else voltColors.amberAccent,
             modifier = Modifier.weight(1f).clickable(onClick = onOpenSecuritySheet),
           )
         }

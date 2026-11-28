@@ -42,13 +42,66 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `turbo shield ad blocker is disabled and scrubbed`() {
-    assertFalse(TurboShield.shouldBlock(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js")))
-    assertFalse(TurboShield.shouldBlock(Uri.parse("https://www.google-analytics.com/analytics.js")))
+  fun `turbo shield ad remover blocks ads trackers popunders returns surrogates and prevents false positives`() {
+    val settings = com.example.data.BrowserSettings()
+    assertEquals(com.example.data.AdBlockerType.ADGUARD, settings.adBlockerType)
+    assertTrue(settings.turboShieldEnabled)
+
+    // Core ad networks & trackers blocked
+    assertTrue(TurboShield.shouldBlock(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js")))
+    assertTrue(TurboShield.shouldBlock(Uri.parse("https://www.google-analytics.com/analytics.js"), com.example.data.AdBlockerType.STANDARD))
+    assertTrue(TurboShield.shouldBlock(Uri.parse("https://analytics.tiktok.com/i18n/pixel/events.js"), com.example.data.AdBlockerType.ADGUARD))
+    assertTrue(TurboShield.shouldBlock(Uri.parse("https://consent.cookiebot.com/uc.js"), com.example.data.AdBlockerType.STRICT))
+
+    // OFF mode disables blocking
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"), com.example.data.AdBlockerType.OFF))
+    assertNull(TurboShield.documentStartScript(com.example.data.AdBlockerType.OFF))
+    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.OFF))
+
+    // Safe allowlisted content & legitimate paths (no false positives on 'adobe', 'download', 'header', normal video)
     assertFalse(TurboShield.shouldBlock(Uri.parse("https://en.wikipedia.org/wiki/Android")))
-    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.ADGUARD))
-    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STRICT))
-    assertEquals(com.example.data.AdBlockerType.OFF, com.example.data.BrowserSettings().adBlockerType)
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://github.com/example/download/header_badge")))
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ")))
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://rr3---sn-abc.googlevideo.com/videoplayback?expire=123&itag=22")))
+
+    // Targeted video ad endpoints ARE blocked without breaking playback
+    assertTrue(TurboShield.shouldBlock(Uri.parse("https://www.youtube.com/youtubei/v1/player/ad_break?key=1")))
+    assertTrue(TurboShield.shouldBlock(Uri.parse("https://rr3---sn-abc.googlevideo.com/videoplayback?expire=123&adformat=15_2_1")))
+
+    // Popunder & redirect navigation blocking
+    assertTrue(TurboShield.isNavigationAdBlocked(Uri.parse("https://serve.popads.net/c?id=1"), com.example.data.AdBlockerType.ADGUARD, isMainFrame = true))
+    assertFalse(TurboShield.isNavigationAdBlocked(Uri.parse("https://en.wikipedia.org/wiki/Kotlin"), com.example.data.AdBlockerType.ADGUARD, isMainFrame = true))
+
+    // MIME-aware surrogates
+    val jsResp = TurboShield.blockedResponseForRequest(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"))
+    assertEquals("application/javascript", jsResp.mimeType)
+    assertEquals("*", jsResp.responseHeaders["Access-Control-Allow-Origin"])
+    val jsBody = jsResp.data.readBytes().decodeToString()
+    assertTrue(jsBody.contains("adsbygoogle"))
+    assertTrue(jsBody.contains("googletag"))
+
+    val gifResp = TurboShield.blockedResponseForRequest(Uri.parse("https://pixel.facebook.com/tr?id=123"), mapOf("Accept" to "image/webp,*/*"))
+    assertEquals("image/gif", gifResp.mimeType)
+
+    val vastResp = TurboShield.blockedResponseForRequest(Uri.parse("https://ads.example.com/vast.xml"))
+    assertEquals("application/xml", vastResp.mimeType)
+    assertTrue(vastResp.data.readBytes().decodeToString().contains("<VAST"))
+
+    // Document-start & cosmetic scripts generated properly
+    val docScript = TurboShield.documentStartScript(com.example.data.AdBlockerType.STEALTH, setOf("trusted.example.com"))
+    assertNotNull(docScript)
+    assertTrue(docScript!!.contains("trusted.example.com"))
+    assertTrue(docScript.contains("globalPrivacyControl"))
+    assertNotNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.ADGUARD))
+    assertNotNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STRICT))
+
+    // Per-host Ad Remover pause registry
+    WebViewTabPool.clearAdBlockPausedHosts()
+    assertFalse(WebViewTabPool.isHostAdBlockPaused("https://news.example.com/article"))
+    WebViewTabPool.setHostAdBlockPaused("https://www.news.example.com/article", true)
+    assertTrue(WebViewTabPool.isHostAdBlockPaused("https://news.example.com/sports"))
+    WebViewTabPool.clearAdBlockPausedHosts()
+    assertFalse(WebViewTabPool.isHostAdBlockPaused("https://news.example.com/article"))
   }
 
   @Test
