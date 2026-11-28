@@ -194,6 +194,23 @@ enum class AppThemeMode(val displayName: String) {
   ZEN_LIGHT("Zen Light"),
 }
 
+enum class BrowserEngineMode(
+  val displayName: String,
+  val badgeLabel: String,
+  val subtitle: String,
+) {
+  GECKO(
+    displayName = "Gecko (Firefox Add-ons)",
+    badgeLabel = "FX",
+    subtitle = "Supports .xpi extensions, native Tracking Protection & proxy isolation",
+  ),
+  WEBVIEW(
+    displayName = "Chromium WebView",
+    badgeLabel = "WV",
+    subtitle = "System Blink/V8 engine with TurboShield request filtering",
+  ),
+}
+
 enum class AdBlockerType(
   val displayName: String,
   val badgeLabel: String,
@@ -206,7 +223,32 @@ enum class AdBlockerType(
   STEALTH("Stealth", "STH", "Strict + DNT/GPC signals & URL tracking parameter strip"),
 }
 
+data class FirefoxAddonInfo(
+  val id: String,
+  val name: String,
+  val version: String,
+  val description: String,
+  val creatorName: String? = null,
+  val enabled: Boolean = true,
+  val allowedInPrivateBrowsing: Boolean = false,
+  val isBuiltIn: Boolean = false,
+  val hasBrowserAction: Boolean = false,
+  val browserActionTitle: String? = null,
+  val homepageUrl: String? = null,
+)
+
+data class AddonCatalogItem(
+  val id: String,
+  val slug: String,
+  val name: String,
+  val summary: String,
+  val category: String,
+  val xpiUrl: String,
+  val amoPageUrl: String,
+)
+
 data class BrowserSettings(
+  val engineMode: BrowserEngineMode = BrowserEngineMode.GECKO,
   val turboShieldEnabled: Boolean = true,
   val adBlockerType: AdBlockerType = AdBlockerType.ADGUARD,
   val liteModeEnabled: Boolean = false,

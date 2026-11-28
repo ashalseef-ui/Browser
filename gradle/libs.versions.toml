@@ -46,6 +46,7 @@ media3 = "1.6.1"
 wireguardTunnel = "1.0.20260102"
 desugarJdkLibs = "2.1.5"
 workManager = "2.10.0"
+geckoview = "132.0.20241110192737"
 
 
 [libraries]
@@ -114,6 +115,7 @@ wireguard-tunnel = { group = "com.wireguard.android", name = "tunnel", version.r
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workManager" }
 androidx-work-testing = { group = "androidx.work", name = "work-testing", version.ref = "workManager" }
+mozilla-geckoview = { group = "org.mozilla.geckoview", name = "geckoview", version.ref = "geckoview" }
 
 
 [plugins]

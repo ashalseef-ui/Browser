@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
@@ -94,6 +95,7 @@ fun SpeedDialHome(
   onNewPrivateTab: () -> Unit,
   onOpenSecuritySheet: () -> Unit,
   onOpenVpnSheet: () -> Unit,
+  onOpenAddonsSheet: () -> Unit = {},
   onRequestExit: () -> Unit,
   onAddSpeedDialClick: () -> Unit,
   onLongPressTile: (BookmarkEntity) -> Unit = {},
@@ -326,44 +328,78 @@ fun SpeedDialHome(
                   )
                 }
 
-                // Tunnel Status Pill on Hero Card
-                Surface(
-                  shape = RoundedCornerShape(100.dp),
-                  color =
-                    if (isVpnActive) voltColors.emeraldShield.copy(alpha = 0.18f)
-                    else voltColors.pillSurface,
-                  border =
-                    BorderStroke(
-                      1.dp,
-                      if (isVpnActive) voltColors.emeraldShield.copy(alpha = 0.55f)
-                      else voltColors.pillBorder,
-                    ),
-                  modifier =
-                    Modifier.clip(RoundedCornerShape(100.dp))
-                      .clickable(onClick = onOpenVpnSheet),
+                Column(
+                  horizontalAlignment = Alignment.End,
+                  verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                  // Tunnel Status Pill on Hero Card
+                  Surface(
+                    shape = RoundedCornerShape(100.dp),
+                    color =
+                      if (isVpnActive) voltColors.emeraldShield.copy(alpha = 0.18f)
+                      else voltColors.pillSurface,
+                    border =
+                      BorderStroke(
+                        1.dp,
+                        if (isVpnActive) voltColors.emeraldShield.copy(alpha = 0.55f)
+                        else voltColors.pillBorder,
+                      ),
+                    modifier =
+                      Modifier.clip(RoundedCornerShape(100.dp))
+                        .clickable(onClick = onOpenVpnSheet),
                   ) {
-                    Icon(
-                      imageVector = Icons.Default.Public,
-                      contentDescription = null,
-                      tint =
-                        if (isVpnActive) voltColors.emeraldShield
-                        else if (isLight) MaterialTheme.colorScheme.onSurfaceVariant
-                        else Color.White,
-                      modifier = Modifier.size(13.dp),
-                    )
-                    Text(
-                      text = if (isVpnActive) "Tunnel On" else "Direct",
-                      style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                      color =
-                        if (isVpnActive) voltColors.emeraldShield
-                        else if (isLight) MaterialTheme.colorScheme.onSurface
-                        else Color.White,
-                    )
+                    Row(
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = null,
+                        tint =
+                          if (isVpnActive) voltColors.emeraldShield
+                          else if (isLight) MaterialTheme.colorScheme.onSurfaceVariant
+                          else Color.White,
+                        modifier = Modifier.size(13.dp),
+                      )
+                      Text(
+                        text = if (isVpnActive) "Tunnel On" else "Direct",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color =
+                          if (isVpnActive) voltColors.emeraldShield
+                          else if (isLight) MaterialTheme.colorScheme.onSurface
+                          else Color.White,
+                      )
+                    }
+                  }
+
+                  // Firefox Add-ons & Engine Pill
+                  Surface(
+                    shape = RoundedCornerShape(100.dp),
+                    color = voltColors.brandAccent.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, voltColors.brandAccent.copy(alpha = 0.45f)),
+                    modifier =
+                      Modifier.clip(RoundedCornerShape(100.dp))
+                        .clickable(onClick = onOpenAddonsSheet)
+                        .testTag("home_addons_button"),
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Extension,
+                        contentDescription = null,
+                        tint = voltColors.brandAccent,
+                        modifier = Modifier.size(13.dp),
+                      )
+                      Text(
+                        text = "${settings.engineMode.badgeLabel} Add-ons",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (isLight) MaterialTheme.colorScheme.onSurface else Color.White,
+                      )
+                    }
                   }
                 }
               }

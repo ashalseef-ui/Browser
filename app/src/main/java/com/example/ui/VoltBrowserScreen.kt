@@ -58,11 +58,15 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.BrowserEngineMode
 import com.example.data.WebContextMenuTarget
 import com.example.ui.components.EdgeGestureOverlay
 import com.example.ui.components.OmniboxDock
 import com.example.ui.components.extractHost
 import com.example.ui.screens.AddSpeedDialDialog
+import com.example.ui.screens.AddonInstallPromptDialog
+import com.example.ui.screens.AddonPopupDialog
+import com.example.ui.screens.AddonsSheet
 import com.example.ui.screens.ExitConfirmDialog
 import com.example.ui.screens.FreePublicVpnSheet
 import com.example.ui.screens.LibrarySettingsSheet
@@ -111,6 +115,10 @@ fun VoltBrowserScreen(
   val hasSystemAutofill by viewModel.hasSystemAutofill.collectAsStateWithLifecycle()
   val pendingSitePermissionPrompt by viewModel.pendingSitePermissionPrompt.collectAsStateWithLifecycle()
   val pendingRuntimePermissions by viewModel.pendingRuntimePermissionRequest.collectAsStateWithLifecycle()
+  val addons by viewModel.addons.collectAsStateWithLifecycle()
+  val isAddonInstalling by viewModel.isAddonInstalling.collectAsStateWithLifecycle()
+  val pendingAddonInstallPrompt by viewModel.pendingAddonInstallPrompt.collectAsStateWithLifecycle()
+  val activeAddonPopup by viewModel.activeAddonPopup.collectAsStateWithLifecycle()
 
   val isMediaOverlayFullscreen = mediaState.isVisible && !mediaState.isMinimized && !isInPipMode
   val isAnyFullscreen = fullscreenCustomView != null || isBrowserFullscreen || isMediaOverlayFullscreen
@@ -166,6 +174,13 @@ fun VoltBrowserScreen(
   val runtimePermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
       viewModel.onRuntimePermissionsResult(results)
+    }
+
+  val xpiFilePickerLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        viewModel.installAddonFromUri(uri)
+      }
     }
 
   LaunchedEffect(pendingRuntimePermissions) {
@@ -381,6 +396,7 @@ fun VoltBrowserScreen(
                 onNewPrivateTab = { viewModel.newTab(isIncognito = true) },
                 onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
                 onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
+                onOpenAddonsSheet = { viewModel.openSheet(BrowserSheet.ADDONS) },
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
                 onAddSpeedDialClick = { viewModel.openSheet(BrowserSheet.ADD_SPEED_DIAL) },
                 onLongPressTile = { bookmark ->
@@ -403,30 +419,58 @@ fun VoltBrowserScreen(
                 onSwipeForward = viewModel::goForward,
                 modifier = Modifier.fillMaxSize(),
               ) {
-                AndroidView(
-                  factory = { ctx -> FrameLayout(ctx) },
-                  update = { container ->
-                    val wv =
-                      viewModel.webViewPool.getOrCreateWebView(
-                        tabId = activeTab.id,
-                        isIncognito = activeTab.isIncognito,
-                        callbacks = viewModel.tabWebCallbacks,
-                        fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
-                      )
-                    if (container.childCount != 1 || container.getChildAt(0) !== wv) {
-                      container.removeAllViews()
-                      (wv.parent as? ViewGroup)?.removeView(wv)
-                      container.addView(
-                        wv,
-                        FrameLayout.LayoutParams(
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                          ViewGroup.LayoutParams.MATCH_PARENT,
-                        ),
-                      )
-                    }
-                  },
-                  modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
-                )
+                if (settings.engineMode == BrowserEngineMode.GECKO) {
+                  AndroidView(
+                    factory = { ctx -> FrameLayout(ctx) },
+                    update = { container ->
+                      val session =
+                        viewModel.geckoTabPool.getOrCreateSession(
+                          tabId = activeTab.id,
+                          isIncognito = activeTab.isIncognito,
+                          callbacks = viewModel.tabWebCallbacks,
+                          fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
+                        )
+                      val gv = viewModel.geckoTabPool.attachView(session)
+                      if (container.childCount != 1 || container.getChildAt(0) !== gv) {
+                        container.removeAllViews()
+                        (gv.parent as? ViewGroup)?.removeView(gv)
+                        container.addView(
+                          gv,
+                          FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                          ),
+                        )
+                      }
+                    },
+                    modifier = Modifier.fillMaxSize().testTag("active_gecko_container"),
+                  )
+                } else {
+                  AndroidView(
+                    factory = { ctx -> FrameLayout(ctx) },
+                    update = { container ->
+                      val wv =
+                        viewModel.webViewPool.getOrCreateWebView(
+                          tabId = activeTab.id,
+                          isIncognito = activeTab.isIncognito,
+                          callbacks = viewModel.tabWebCallbacks,
+                          fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
+                        )
+                      if (container.childCount != 1 || container.getChildAt(0) !== wv) {
+                        container.removeAllViews()
+                        (wv.parent as? ViewGroup)?.removeView(wv)
+                        container.addView(
+                          wv,
+                          FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                          ),
+                        )
+                      }
+                    },
+                    modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
+                  )
+                }
               }
 
               activeTab.httpsWarning?.let { warning ->
@@ -632,12 +676,34 @@ fun VoltBrowserScreen(
           onToggleDesktopMode = viewModel::toggleDesktopMode,
           onToggleBrowserFullscreen = { viewModel.toggleBrowserFullscreen() },
           onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
+          onOpenAddonsSheet = { viewModel.openSheet(BrowserSheet.ADDONS) },
           onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
           onOpenUrl = viewModel::navigate,
           onDeleteBookmark = viewModel::deleteBookmark,
           onToggleLiteMode = viewModel::toggleLiteMode,
           onSelectSearchEngine = viewModel::setSearchEngine,
           onSelectThemeMode = viewModel::setThemeMode,
+          onDismiss = viewModel::closeSheet,
+        )
+      }
+      BrowserSheet.ADDONS -> {
+        AddonsSheet(
+          engineMode = settings.engineMode,
+          addons = addons,
+          isInstalling = isAddonInstalling,
+          onSelectEngineMode = viewModel::setEngineMode,
+          onInstallFromUrl = viewModel::installAddonFromUrl,
+          onImportLocalXpiClick = {
+            xpiFilePickerLauncher.launch(
+              arrayOf("application/x-xpinstall", "application/zip", "application/octet-stream", "*/*")
+            )
+          },
+          onOpenAmoStore = viewModel::openAmoStore,
+          onToggleAddonEnabled = viewModel::setAddonEnabled,
+          onToggleAddonPrivate = viewModel::setAddonAllowedInPrivate,
+          onOpenAddonPopup = viewModel::openAddonPopup,
+          onUninstallAddon = viewModel::uninstallAddon,
+          onRefreshAddons = viewModel::refreshAddons,
           onDismiss = viewModel::closeSheet,
         )
       }
@@ -737,6 +803,20 @@ fun VoltBrowserScreen(
       SitePermissionPromptDialog(
         prompt = prompt,
         onDecision = viewModel::respondToSitePermissionPrompt,
+      )
+    }
+
+    pendingAddonInstallPrompt?.let { prompt ->
+      AddonInstallPromptDialog(
+        prompt = prompt,
+        onDecision = viewModel::respondToAddonInstallPrompt,
+      )
+    }
+
+    activeAddonPopup?.let { popup ->
+      AddonPopupDialog(
+        popup = popup,
+        onDismiss = viewModel::closeAddonPopup,
       )
     }
   }

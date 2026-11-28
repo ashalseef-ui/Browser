@@ -837,4 +837,113 @@ class ExampleRobolectricTest {
     MediaSniffer.clearPlaybackContexts()
     assertNull(MediaSniffer.getPlaybackContext(mediaUrl))
   }
+
+  @Test
+  fun `firefox addon manager resolves amo urls validates xpi archives and curates addons`() {
+    assertTrue(com.example.browser.FirefoxAddonManager.CURATED_ADDONS.isNotEmpty())
+    com.example.browser.FirefoxAddonManager.CURATED_ADDONS.forEach { item ->
+      assertTrue(com.example.browser.FirefoxAddonManager.isXpiUrl(item.xpiUrl))
+      assertTrue(item.amoPageUrl.startsWith("https://addons.mozilla.org/"))
+    }
+
+    assertTrue(
+      com.example.browser.FirefoxAddonManager.isXpiUrl(
+        "https://addons.mozilla.org/firefox/downloads/file/4321000/ublock_origin-1.60.0.xpi?src=dp"
+      )
+    )
+    assertFalse(com.example.browser.FirefoxAddonManager.isXpiUrl("https://example.com/archive.zip"))
+
+    assertEquals(
+      "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/addon-ublock-origin-latest.xpi",
+      com.example.browser.FirefoxAddonManager.resolveAmoXpiUrl(
+        "https://addons.mozilla.org/en-US/firefox/addon/ublock-origin/"
+      ),
+    )
+    assertEquals(
+      "https://addons.mozilla.org/firefox/downloads/latest/darkreader/addon-darkreader-latest.xpi",
+      com.example.browser.FirefoxAddonManager.resolveAmoXpiUrl(
+        "https://addons.mozilla.org/android/addon/darkreader/?utm_source=amo"
+      ),
+    )
+    assertNull(com.example.browser.FirefoxAddonManager.resolveAmoXpiUrl("not a url"))
+
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val validXpi = File(context.cacheDir, "test_valid_addon.xpi")
+    val missingManifestXpi = File(context.cacheDir, "test_invalid_addon.xpi")
+    val corruptXpi = File(context.cacheDir, "test_corrupt_addon.xpi")
+    try {
+      java.util.zip.ZipOutputStream(validXpi.outputStream()).use { zos ->
+        zos.putNextEntry(java.util.zip.ZipEntry("manifest.json"))
+        zos.write("""{"manifest_version":2,"name":"Test","version":"1.0"}""".toByteArray())
+        zos.closeEntry()
+      }
+      assertTrue(com.example.browser.FirefoxAddonManager.validateXpiArchive(validXpi))
+
+      java.util.zip.ZipOutputStream(missingManifestXpi.outputStream()).use { zos ->
+        zos.putNextEntry(java.util.zip.ZipEntry("readme.txt"))
+        zos.write("hello".toByteArray())
+        zos.closeEntry()
+      }
+      assertFalse(com.example.browser.FirefoxAddonManager.validateXpiArchive(missingManifestXpi))
+
+      corruptXpi.writeText("not a zip archive")
+      assertFalse(com.example.browser.FirefoxAddonManager.validateXpiArchive(corruptXpi))
+    } finally {
+      validXpi.delete()
+      missingManifestXpi.delete()
+      corruptXpi.delete()
+    }
+  }
+
+  @Test
+  fun `browser engine mode defaults to gecko for firefox addons and persists webview toggle`() {
+    val defaultSettings = com.example.data.BrowserSettings()
+    assertEquals(com.example.data.BrowserEngineMode.GECKO, defaultSettings.engineMode)
+    assertEquals("FX", defaultSettings.engineMode.badgeLabel)
+    assertEquals("WV", com.example.data.BrowserEngineMode.WEBVIEW.badgeLabel)
+  }
+
+  @Test
+  fun `segmented downloader plans contiguous chunks and reads checkpoint metadata`() {
+    val segments = com.example.media.SegmentedDownloader.planSegments(totalBytes = 10_000_005L, maxSegments = 8)
+    assertEquals(8, segments.size)
+    assertEquals(0L, segments.first().startByte)
+    assertEquals(10_000_004L, segments.last().endByte)
+    for (i in 1 until segments.size) {
+      assertEquals(segments[i - 1].endByte + 1L, segments[i].startByte)
+    }
+    assertEquals(10_000_005L, segments.sumOf { it.totalLength })
+
+    val probeAcceptRange =
+      com.example.media.SegmentedDownloader.ProbeResult(
+        totalBytes = 5_000_000L,
+        acceptRanges = true,
+        etag = "\"abc\"",
+        lastModified = null,
+        contentDisposition = null,
+        contentType = "video/mp4",
+        finalUrl = "https://cdn.example.com/video.mp4",
+      )
+    val probeSmall = probeAcceptRange.copy(totalBytes = 256_000L)
+    val probeNoRange = probeAcceptRange.copy(acceptRanges = false)
+    val downloader = com.example.media.SegmentedDownloader(okhttp3.OkHttpClient())
+    assertTrue(downloader.shouldUseSegmentedDownload(probeAcceptRange))
+    assertFalse(downloader.shouldUseSegmentedDownload(probeSmall))
+    assertFalse(downloader.shouldUseSegmentedDownload(probeNoRange))
+
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val targetFile = File(context.cacheDir, "seg_test_video.mp4")
+    val metaFile = com.example.media.SegmentedDownloader.segMetaFileFor(targetFile)
+    try {
+      metaFile.writeText(
+        """{"totalBytes":5000000,"segments":[{"index":0,"start":0,"end":2499999,"downloaded":1024},{"index":1,"start":2500000,"end":4999999,"downloaded":2048}]}"""
+      )
+      assertEquals(3072L, com.example.media.SegmentedDownloader.readSavedProgressBytes(targetFile))
+      com.example.media.SegmentedDownloader.cleanupMetaFile(targetFile)
+      assertFalse(metaFile.exists())
+    } finally {
+      metaFile.delete()
+      targetFile.delete()
+    }
+  }
 }

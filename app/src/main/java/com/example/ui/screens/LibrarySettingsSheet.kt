@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -88,6 +89,7 @@ fun LibrarySettingsSheet(
   onToggleDesktopMode: (Boolean) -> Unit,
   onToggleBrowserFullscreen: () -> Unit,
   onOpenSecuritySheet: () -> Unit,
+  onOpenAddonsSheet: () -> Unit = {},
   onRequestExit: () -> Unit,
   onOpenUrl: (String) -> Unit,
   onDeleteBookmark: (Long) -> Unit,
@@ -255,6 +257,22 @@ fun LibrarySettingsSheet(
               onOpenSecuritySheet()
             },
             modifier = Modifier.weight(1f),
+          )
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          CommandGridTile(
+            icon = Icons.Default.Extension,
+            label = "Firefox Add-ons (${settings.engineMode.badgeLabel})",
+            enabled = true,
+            isActive = settings.engineMode == com.example.data.BrowserEngineMode.GECKO,
+            onClick = {
+              onDismiss()
+              onOpenAddonsSheet()
+            },
+            modifier = Modifier.weight(1f).testTag("menu_addons_button"),
           )
         }
       }

@@ -16,19 +16,24 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.VoltBrowserApp
 import com.example.browser.DeviceTraceCleaner
+import com.example.browser.FirefoxAddonManager
+import com.example.browser.GeckoTabPool
 import com.example.browser.MediaSniffer
 import com.example.browser.MediaSnifferCoordinator
 import com.example.browser.SocialHubHelper
 import com.example.browser.TabWebCallbacks
 import com.example.browser.VoltSpeedEngine
+import com.example.browser.WebContextTargetResolver
 import com.example.browser.WebViewTabPool
 import com.example.data.AdBlockerType
 import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
+import com.example.data.BrowserEngineMode
 import com.example.data.BrowserSettings
 import com.example.data.BrowserTabState
 import com.example.data.DetectedMediaItem
 import com.example.data.DownloadItemEntity
+import com.example.data.FirefoxAddonInfo
 import com.example.data.HttpsWarningState
 import com.example.data.MediaKind
 import com.example.data.SearchEngine
@@ -73,6 +78,20 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   val speedEngine = app.speedEngine
 
   val webViewPool = WebViewTabPool(application, speedEngine, viewModelScope)
+  val firefoxAddonManager =
+    FirefoxAddonManager(
+      context = application,
+      scope = viewModelScope,
+      onShowMessage = ::showMessage,
+      onBridgeMediaDetected = { pageUrl, items ->
+        val matchingTab =
+          _tabs.value.firstOrNull { !it.isSpeedDial && it.url == pageUrl } ?: activeTab.value
+        if (!matchingTab.isSpeedDial) {
+          mediaSnifferCoordinator.mergeAndProbeMediaItems(matchingTab.id, items)
+        }
+      },
+    )
+  val geckoTabPool = GeckoTabPool(application, firefoxAddonManager, speedEngine, viewModelScope)
   val mediaManager = MediaPlaybackManager(application, viewModelScope)
   private val mediaDownloader =
     MediaDownloader(application, speedEngine.okHttpClient, repository, viewModelScope)
@@ -145,6 +164,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     _pendingRuntimePermissionRequest.asStateFlow()
 
   val mediaPlayerState: StateFlow<MediaPlayerUiState> = mediaManager.uiState
+  val addons: StateFlow<List<FirefoxAddonInfo>> = firefoxAddonManager.addons
+  val isAddonInstalling: StateFlow<Boolean> = firefoxAddonManager.isInstalling
+  val pendingAddonInstallPrompt: StateFlow<AddonInstallPromptState?> =
+    firefoxAddonManager.pendingInstallPrompt
+  val activeAddonPopup: StateFlow<AddonPopupState?> = firefoxAddonManager.activeAddonPopup
+
+  private val isGeckoActive: Boolean
+    get() = settings.value.engineMode == BrowserEngineMode.GECKO
 
   private val vpnCoordinator =
     VpnProxyCoordinator(
@@ -154,9 +181,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       scope = viewModelScope,
       settingsFlow = settings,
       activeTabProvider = { activeTab.value },
-      onReloadActiveTab = { webViewPool.findWebView(activeTab.value.id)?.reload() },
-      onStopAllWebViewLoads = { webViewPool.stopAllLoads() },
-      onKillSwitchBlockingChanged = { blocked -> webViewPool.isKillSwitchBlocking = blocked },
+      onReloadActiveTab = { reloadTabById(activeTab.value.id) },
+      onStopAllWebViewLoads = {
+        webViewPool.stopAllLoads()
+        geckoTabPool.stopAllLoads()
+      },
+      onKillSwitchBlockingChanged = { blocked ->
+        webViewPool.isKillSwitchBlocking = blocked
+        geckoTabPool.isKillSwitchBlocking = blocked
+        syncGeckoBridgeState()
+      },
       onShowMessage = ::showMessage,
     )
   val vpnState: StateFlow<VpnTunnelState> = vpnCoordinator.vpnState
@@ -451,6 +485,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     webViewPool.proxyAuthTargetProvider = { speedEngine.getActiveProxyAuthTarget() }
     webViewPool.proxyCredentialsProvider = { speedEngine.getActiveProxyCredentials() }
     webViewPool.isPublicRelayActiveProvider = { vpnState.value.activeRelay?.isPublicFreeRelay == true }
+    geckoTabPool.isPublicRelayActiveProvider = { vpnState.value.activeRelay?.isPublicFreeRelay == true }
+    geckoTabPool.onXpiIntercepted = { xpiUrl ->
+      firefoxAddonManager.installFromUrl(xpiUrl, settings.value)
+    }
+    geckoTabPool.onFullscreenChanged = { fs -> _isBrowserFullscreen.value = fs }
     refreshSocialAppStates()
     val baselineUidBytes = readAppUidTotalBytes()
     viewModelScope.launch {
@@ -482,17 +521,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch {
       settings.collect { currentSettings ->
         webViewPool.refreshSettings(currentSettings)
+        geckoTabPool.refreshSettings(currentSettings)
         vpnCoordinator.syncSavedConfigs(currentSettings)
+        syncGeckoBridgeState()
       }
+    }
+    viewModelScope.launch {
+      vpnState.collect { syncGeckoBridgeState() }
     }
     viewModelScope.launch {
       repository.sitePermissions.collect { entities ->
         webViewPool.syncPersistedSitePermissions(entities)
+        geckoTabPool.syncPersistedSitePermissions(entities)
       }
     }
     viewModelScope.launch {
       repository.siteSettings.collect { entities ->
         webViewPool.syncSiteHostOverrides(entities)
+        geckoTabPool.syncSiteHostOverrides(entities)
         val overridesByHost = entities.associateBy { it.host }
         _tabs.update { list ->
           list.map { tab ->
@@ -513,6 +559,42 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     mediaManager.connect()
   }
 
+  private fun syncGeckoBridgeState() {
+    val auth = speedEngine.getActiveProxyAuthTarget()
+    val relay = vpnState.value.activeRelay
+    val proxyHost = auth?.host ?: relay?.ip.orEmpty()
+    val proxyPort = auth?.port ?: relay?.port ?: 0
+    val proxyType = if (auth != null) "http" else relay?.protocol?.lowercase().orEmpty()
+    firefoxAddonManager.syncBridgeState(
+      killSwitchBlocking = geckoTabPool.isKillSwitchBlocking,
+      liteModeEnabled = settings.value.liteModeEnabled,
+      proxyType = proxyType,
+      proxyHost = proxyHost,
+      proxyPort = proxyPort,
+      proxyUsername = auth?.username ?: relay?.username.orEmpty(),
+      proxyPassword = auth?.password ?: relay?.password.orEmpty(),
+      bypassedHosts = emptySet(),
+    )
+  }
+
+  private fun reloadTabById(tabId: String) {
+    if (isGeckoActive) {
+      geckoTabPool.findSession(tabId)?.reload()
+    } else {
+      webViewPool.findWebView(tabId)?.reload()
+    }
+  }
+
+  private fun loadUrlInActiveEngine(tabId: String, isIncognito: Boolean, url: String) {
+    if (isGeckoActive) {
+      val session = geckoTabPool.getOrCreateSession(tabId, isIncognito, tabWebCallbacks)
+      session.loadUri(url)
+    } else {
+      val wv = webViewPool.getOrCreateWebView(tabId, isIncognito, tabWebCallbacks)
+      wv.loadUrl(url)
+    }
+  }
+
   fun navigate(rawInput: String, overrideEngine: SearchEngine? = null) {
     val trimmed = rawInput.trim()
     if (trimmed.isEmpty()) return
@@ -531,6 +613,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       }
       is WebViewTabPool.OutgoingNavigationDecision.LoadUrl -> {
         val resolvedUrl = decision.url
+        if (isGeckoActive && FirefoxAddonManager.isXpiUrl(resolvedUrl)) {
+          firefoxAddonManager.installFromUrl(resolvedUrl, settings.value)
+          _activeSheet.value = BrowserSheet.NONE
+          return
+        }
         speedEngine.prewarmOrigin(resolvedUrl)
         updateTab(current.id) {
           it.copy(
@@ -544,8 +631,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             httpsWarning = null,
           )
         }
-        val wv = webViewPool.getOrCreateWebView(current.id, current.isIncognito, tabWebCallbacks)
-        wv.loadUrl(resolvedUrl)
+        loadUrlInActiveEngine(current.id, current.isIncognito, resolvedUrl)
         _activeSheet.value = BrowserSheet.NONE
       }
     }
@@ -554,9 +640,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun hardReloadActiveTab() {
     val current = activeTab.value
     if (current.isSpeedDial) return
-    val wv = webViewPool.findWebView(current.id) ?: return
-    wv.clearCache(true)
-    wv.reload()
+    if (isGeckoActive) {
+      geckoTabPool.findSession(current.id)?.reload(org.mozilla.geckoview.GeckoSession.LOAD_FLAGS_BYPASS_CACHE)
+    } else {
+      val wv = webViewPool.findWebView(current.id) ?: return
+      wv.clearCache(true)
+      wv.reload()
+    }
     showMessage("Hard reload (cache bypassed)")
   }
 
@@ -574,6 +664,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     webViewPool.findWebView(current.id)?.let { wv ->
       wv.clearCache(true)
       wv.reload()
+    }
+    if (isGeckoActive) {
+      geckoTabPool.findSession(current.id)?.reload(org.mozilla.geckoview.GeckoSession.LOAD_FLAGS_BYPASS_CACHE)
     }
     showMessage(
       if (nextEnabled) "Media Compatibility Bypass ON for $host"
@@ -595,7 +688,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     updateTab(current.id) { it.copy(siteJsEnabled = nextJs) }
     viewModelScope.launch {
       repository.saveSiteJsOverride(host, persistedJs)
-      webViewPool.findWebView(current.id)?.reload()
+      reloadTabById(current.id)
     }
     showMessage(
       if (nextJs) "JavaScript enabled for $host" else "JavaScript blocked for $host"
@@ -618,7 +711,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     updateTab(current.id) { it.copy(siteDesktopOverride = overrideValue) }
     viewModelScope.launch {
       repository.saveSiteDesktopOverride(host, overrideValue)
-      webViewPool.findWebView(current.id)?.reload()
+      reloadTabById(current.id)
     }
     showMessage(
       if (nextDesktop) "Desktop view enabled for $host" else "Mobile view enabled for $host"
@@ -640,6 +733,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     webViewPool.findWebView(current.id)?.let { wv ->
       wv.clearCache(true)
       wv.reload()
+    }
+    if (isGeckoActive) {
+      geckoTabPool.findSession(current.id)?.reload()
     }
     showMessage(
       if (nextPaused) "Ad Remover paused on $host"
@@ -667,7 +763,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch {
       repository.clearSiteSettingsForHost(host)
       repository.clearSitePermissionsForHost(host)
-      webViewPool.findWebView(current.id)?.reload()
+      reloadTabById(current.id)
     }
     showMessage("Site settings & permissions reset for $host")
   }
@@ -680,6 +776,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun goBack(): Boolean {
     val current = activeTab.value
     if (current.isSpeedDial) return false
+    if (isGeckoActive) {
+      val session = geckoTabPool.findSession(current.id)
+      return if (session != null && geckoTabPool.canGoBack(current.id)) {
+        session.goBack()
+        true
+      } else {
+        goHome()
+        true
+      }
+    }
     val wv = webViewPool.findWebView(current.id)
     return if (wv != null && wv.canGoBack()) {
       wv.goBack()
@@ -692,6 +798,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
   fun goForward() {
     val current = activeTab.value
+    if (isGeckoActive) {
+      val session = geckoTabPool.findSession(current.id)
+      if (current.isSpeedDial && session != null && current.url.isNotBlank()) {
+        updateTab(current.id) { it.copy(isSpeedDial = false) }
+      } else if (session != null && geckoTabPool.canGoForward(current.id)) {
+        session.goForward()
+      }
+      return
+    }
     val wv = webViewPool.findWebView(current.id)
     if (current.isSpeedDial && wv != null && current.url.isNotBlank()) {
       updateTab(current.id) { it.copy(isSpeedDial = false) }
@@ -703,6 +818,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun reloadOrStop() {
     val current = activeTab.value
     if (current.isSpeedDial) return
+    if (isGeckoActive) {
+      val session = geckoTabPool.findSession(current.id) ?: return
+      if (current.isLoading) {
+        session.stop()
+        updateTab(current.id) { it.copy(isLoading = false, progress = 0) }
+      } else {
+        session.reload()
+      }
+      return
+    }
     val wv = webViewPool.findWebView(current.id) ?: return
     if (current.isLoading) {
       wv.stopLoading()
@@ -757,8 +882,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             )
           }
           speedEngine.prewarmOrigin(loadTarget)
-          val wv = webViewPool.getOrCreateWebView(newTab.id, isIncognito, tabWebCallbacks)
-          wv.loadUrl(loadTarget)
+          loadUrlInActiveEngine(newTab.id, isIncognito, loadTarget)
         }
       }
     }
@@ -793,6 +917,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val currentList = _tabs.value
     if (currentList.size <= 1) {
       webViewPool.destroyTab(tabId)
+      geckoTabPool.destroyTab(tabId)
       mediaSnifferCoordinator.resetTab(tabId)
       val fresh = BrowserTabState(title = "Speed Dial", isSpeedDial = true)
       _tabs.value = listOf(fresh)
@@ -802,6 +927,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val index = currentList.indexOfFirst { it.id == tabId }
     val remaining = currentList.filterNot { it.id == tabId }
     webViewPool.destroyTab(tabId)
+    geckoTabPool.destroyTab(tabId)
     mediaSnifferCoordinator.resetTab(tabId)
     _tabs.value = remaining
     if (_activeTabId.value == tabId) {
@@ -814,6 +940,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val currentIds = _tabs.value.map { it.id }
     currentIds.forEach { id ->
       webViewPool.destroyTab(id)
+      geckoTabPool.destroyTab(id)
       mediaSnifferCoordinator.resetTab(id)
     }
     val fresh = BrowserTabState(title = "Speed Dial", isSpeedDial = true)
@@ -824,6 +951,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun openSheet(sheet: BrowserSheet) {
+    if (sheet == BrowserSheet.ADDONS) {
+      firefoxAddonManager.refreshAddons(settings.value)
+    }
     _activeSheet.value = sheet
   }
 
@@ -836,10 +966,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     _findInPageVisible.value = next
     if (!next) {
       webViewPool.findWebView(activeTab.value.id)?.clearMatches()
+      geckoTabPool.clearFindMatches(activeTab.value.id)
     }
   }
 
   fun findInPage(query: String, forward: Boolean = true) {
+    if (isGeckoActive) {
+      geckoTabPool.findInPage(activeTab.value.id, query, forward)
+      return
+    }
     val wv = webViewPool.findWebView(activeTab.value.id) ?: return
     if (query.isBlank()) {
       wv.clearMatches()
@@ -1274,6 +1409,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
   fun wipeSessionCacheAndCookies() {
     webViewPool.wipeAllCacheAndCookies()
+    geckoTabPool.wipeAllSessionData()
     showMessage("Session cache and cookies wiped")
   }
 
@@ -1293,14 +1429,84 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     app.startActivity(chooser)
   }
 
+  // ---- Engine Switching & Firefox Add-ons (.xpi) ----
 
+  fun setEngineMode(mode: BrowserEngineMode) {
+    if (settings.value.engineMode == mode) return
+    viewModelScope.launch {
+      repository.preferences.setEngineMode(mode)
+      val current = activeTab.value
+      if (!current.isSpeedDial && current.url.isNotBlank()) {
+        if (mode == BrowserEngineMode.GECKO) {
+          val session = geckoTabPool.getOrCreateSession(current.id, current.isIncognito, tabWebCallbacks)
+          session.loadUri(current.url)
+        } else {
+          val wv = webViewPool.getOrCreateWebView(current.id, current.isIncognito, tabWebCallbacks)
+          wv.loadUrl(current.url)
+        }
+      }
+      if (mode == BrowserEngineMode.GECKO) {
+        firefoxAddonManager.refreshAddons(settings.value.copy(engineMode = mode))
+      }
+      showMessage("Switched engine to ${mode.displayName}")
+    }
+  }
+
+  fun refreshAddons() {
+    firefoxAddonManager.refreshAddons(settings.value)
+  }
+
+  fun installAddonFromUrl(rawUrl: String) {
+    if (!isGeckoActive) {
+      setEngineMode(BrowserEngineMode.GECKO)
+    }
+    firefoxAddonManager.installFromUrl(rawUrl, settings.value)
+  }
+
+  fun installAddonFromUri(uri: Uri) {
+    if (!isGeckoActive) {
+      setEngineMode(BrowserEngineMode.GECKO)
+    }
+    firefoxAddonManager.installFromContentUri(uri, settings.value)
+  }
+
+  fun openAmoStore() {
+    if (!isGeckoActive) {
+      setEngineMode(BrowserEngineMode.GECKO)
+    }
+    navigate("https://addons.mozilla.org/en-US/firefox/")
+  }
+
+  fun respondToAddonInstallPrompt(allow: Boolean, allowPrivate: Boolean) {
+    firefoxAddonManager.respondToInstallPrompt(allow, allowPrivate)
+  }
+
+  fun closeAddonPopup() {
+    firefoxAddonManager.closeAddonPopup()
+  }
+
+  fun setAddonEnabled(addonId: String, enabled: Boolean) {
+    firefoxAddonManager.setAddonEnabled(addonId, enabled)
+  }
+
+  fun setAddonAllowedInPrivate(addonId: String, allowed: Boolean) {
+    firefoxAddonManager.setAllowedInPrivateBrowsing(addonId, allowed)
+  }
+
+  fun openAddonPopup(addonId: String) {
+    firefoxAddonManager.openAddonPopup(addonId)
+  }
+
+  fun uninstallAddon(addonId: String) {
+    firefoxAddonManager.uninstallAddon(addonId)
+  }
 
   fun setAdBlockerType(type: AdBlockerType) {
     viewModelScope.launch {
       repository.preferences.setAdBlockerType(type)
       val current = activeTab.value
       if (!current.isSpeedDial && current.url.isNotBlank()) {
-        webViewPool.findWebView(current.id)?.reload()
+        reloadTabById(current.id)
       }
       showMessage(
         if (type == AdBlockerType.OFF) "Ad Remover turned off"
@@ -1326,6 +1532,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
   fun proceedWithInsecureHttp(tabId: String, httpUrl: String) {
     webViewPool.allowInsecureHttpHost(httpUrl)
+    geckoTabPool.allowInsecureHttpHost(httpUrl)
     updateTab(tabId) {
       it.copy(
         url = httpUrl,
@@ -1337,8 +1544,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       )
     }
     val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
-    val wv = webViewPool.getOrCreateWebView(tabId, tab.isIncognito, tabWebCallbacks)
-    wv.loadUrl(httpUrl)
+    loadUrlInActiveEngine(tabId, tab.isIncognito, httpUrl)
   }
 
   fun tryHttpsInstead(tabId: String, httpsUrl: String) {
@@ -1353,12 +1559,22 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       )
     }
     val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
-    val wv = webViewPool.getOrCreateWebView(tabId, tab.isIncognito, tabWebCallbacks)
-    wv.loadUrl(httpsUrl)
+    loadUrlInActiveEngine(tabId, tab.isIncognito, httpsUrl)
   }
 
   fun dismissHttpsWarning(tabId: String) {
     updateTab(tabId) { it.copy(httpsWarning = null) }
+    if (isGeckoActive) {
+      val session = geckoTabPool.findSession(tabId)
+      if (session != null && geckoTabPool.canGoBack(tabId)) {
+        session.goBack()
+      } else {
+        updateTab(tabId) {
+          it.copy(isSpeedDial = true, title = "Speed Dial", isLoading = false, progress = 0, httpsWarning = null)
+        }
+      }
+      return
+    }
     val wv = webViewPool.findWebView(tabId)
     if (wv != null && wv.canGoBack()) {
       wv.goBack()
@@ -1412,7 +1628,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun toggleDesktopMode(enabled: Boolean) {
     viewModelScope.launch {
       repository.preferences.setDesktopMode(enabled)
-      webViewPool.findWebView(activeTab.value.id)?.reload()
+      reloadTabById(activeTab.value.id)
     }
   }
 
@@ -1485,6 +1701,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     vpnCoordinator.shutdownAndWipeState()
     webViewPool.destroyAllTabs()
+    geckoTabPool.destroyAllTabs()
+    geckoTabPool.wipeAllSessionData()
     WebViewTabPool.clearMediaCompatBypassHosts()
     WebViewTabPool.clearAdBlockPausedHosts()
     MediaSniffer.clearPlaybackContexts()
@@ -1581,5 +1799,6 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     mediaManager.release()
     vpnCoordinator.stopWireGuardStatsPolling()
     webViewPool.destroyAllTabs()
+    geckoTabPool.destroyAllTabs()
   }
 }
