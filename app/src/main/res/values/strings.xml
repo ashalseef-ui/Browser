@@ -2,14 +2,14 @@
     <string name="app_name">Volt Browser</string>
     <string name="omnibox_placeholder">Search or enter web address</string>
     <string name="speed_dial_title">Speed Dial</string>
-    <string name="turbo_shield_label">Turbo Shield</string>
-    <string name="media_vault_title">Media Hub</string>
-    <string name="vpn_title">Free Auto Proxy</string>
-    <string name="tabs_title">Open Tabs</string>
+    <string name="privacy_shield_label">Privacy Guard</string>
+    <string name="media_vault_title">Media Studio</string>
+    <string name="vpn_title">Network &amp; Tunnel</string>
+    <string name="tabs_title">Tab Deck</string>
     <string name="bookmarks_title">Bookmarks</string>
     <string name="history_title">History</string>
     <string name="downloads_title">Downloads</string>
-    <string name="settings_title">Engine &amp; Privacy</string>
+    <string name="settings_title">Engine &amp; Appearance</string>
     <string name="new_tab">New Tab</string>
     <string name="new_private_tab">Private Tab</string>
     <string name="close_tab">Close tab</string>
@@ -17,12 +17,12 @@
     <string name="cd_forward">Navigate forward</string>
     <string name="cd_reload">Reload page</string>
     <string name="cd_stop">Stop loading</string>
-    <string name="cd_home">Speed Dial Home</string>
+    <string name="cd_home">Start Page</string>
     <string name="cd_tabs">Switch tabs</string>
-    <string name="cd_menu">Browser menu</string>
-    <string name="cd_media_detected">Play or download detected media</string>
-    <string name="cd_security_shield">Page security and tracker shield</string>
-    <string name="cd_vpn_status">Free Auto Proxy and privacy exit shield</string>
+    <string name="cd_menu">Command menu</string>
+    <string name="cd_media_detected">Open Media Studio</string>
+    <string name="cd_security_shield">Connection security and privacy controls</string>
+    <string name="cd_vpn_status">Network tunnel, proxy, and DNS controls</string>
     <string name="cd_bookmark">Toggle bookmark</string>
     <string name="cd_share">Share page</string>
     <string name="cd_pip">Picture in Picture</string>
@@ -39,7 +39,7 @@
     <string name="cd_paste_and_go">Paste from clipboard and go</string>
     <string name="cd_gesture_back">Swipe back gesture</string>
     <string name="cd_gesture_forward">Swipe forward gesture</string>
-    <string name="cd_site_bypass">Toggle site shield bypass for media compatibility</string>
+    <string name="cd_site_bypass">Toggle site media compatibility bypass</string>
     <string name="exit_erase_title">Exit &amp; Erase Everything?</string>
     <string name="exit_erase_message">This closes all tabs, stops downloads, media playback, and proxy/VPN tunnels, and erases all browser caches, cookies, WebView storage, temporary files, and app data on this device.</string>
 </resources>

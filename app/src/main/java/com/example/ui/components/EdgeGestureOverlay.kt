@@ -11,11 +11,9 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -51,8 +49,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /**
- * Interactive edge-swipe gesture overlay for sleek browser Back/Forward navigation.
- * Uses narrow 22.dp left/right edge hit zones so in-page horizontal scrolling and carousels stay untouched.
+ * Interactive edge-swipe gesture overlay for smooth browser Back/Forward navigation.
  */
 @Composable
 fun EdgeGestureOverlay(
@@ -87,7 +84,6 @@ fun EdgeGestureOverlay(
     content()
 
     if (enabled) {
-      // Left Edge Zone -> Swipe Right for Back / Speed Dial
       Box(
         modifier =
           Modifier.align(Alignment.CenterStart)
@@ -136,7 +132,6 @@ fun EdgeGestureOverlay(
             .testTag("edge_back_gesture_zone")
       )
 
-      // Right Edge Zone -> Swipe Left for Forward (when available)
       Box(
         modifier =
           Modifier.align(Alignment.CenterEnd)
@@ -186,11 +181,10 @@ fun EdgeGestureOverlay(
             .testTag("edge_forward_gesture_zone")
       )
 
-      // Live Spring-Tracked Left Edge Pill Indicator
       if (leftPull.value > 4f) {
         val progress = (leftPull.value / triggerPx).coerceIn(0f, 1f)
         val armed = leftPull.value >= triggerPx
-        val pillTint = if (armed) voltColors.emeraldShield else voltColors.cyanAccent
+        val pillTint = if (armed) voltColors.emeraldShield else voltColors.brandAccent
         Box(
           modifier =
             Modifier.align(Alignment.CenterStart)
@@ -220,23 +214,17 @@ fun EdgeGestureOverlay(
             Icon(
               imageVector = if (canGoBack) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Home,
               contentDescription = stringResource(R.string.cd_gesture_back),
-              tint =
-                if (armed) {
-                  if (voltColors.isLightTheme) Color.White else Color(0xFF071318)
-                } else {
-                  pillTint
-                },
+              tint = if (armed) Color.White else pillTint,
               modifier = Modifier.size(20.dp),
             )
           }
         }
       }
 
-      // Live Spring-Tracked Right Edge Pill Indicator
       if (rightPull.value > 4f && canGoForward) {
         val progress = (rightPull.value / triggerPx).coerceIn(0f, 1f)
         val armed = rightPull.value >= triggerPx
-        val pillTint = if (armed) voltColors.emeraldShield else voltColors.cyanAccent
+        val pillTint = if (armed) voltColors.emeraldShield else voltColors.brandAccent
         Box(
           modifier =
             Modifier.align(Alignment.CenterEnd)
@@ -266,12 +254,7 @@ fun EdgeGestureOverlay(
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowForward,
               contentDescription = stringResource(R.string.cd_gesture_forward),
-              tint =
-                if (armed) {
-                  if (voltColors.isLightTheme) Color.White else Color(0xFF071318)
-                } else {
-                  pillTint
-                },
+              tint = if (armed) Color.White else pillTint,
               modifier = Modifier.size(20.dp),
             )
           }

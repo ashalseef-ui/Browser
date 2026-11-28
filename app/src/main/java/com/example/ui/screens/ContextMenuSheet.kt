@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -77,10 +76,6 @@ fun WebContextMenuSheet(
 
   val primaryUrl = target.mediaUrl ?: target.linkUrl ?: target.imageUrl.orEmpty()
   val isMediaTarget = !target.mediaUrl.isNullOrBlank()
-  val isHttpLink =
-    target.linkUrl?.let {
-      it.startsWith("http://", true) || it.startsWith("https://", true)
-    } == true
   val isHttpMedia =
     target.mediaUrl?.let {
       it.startsWith("http://", true) || it.startsWith("https://", true)
@@ -97,7 +92,7 @@ fun WebContextMenuSheet(
   val headerTint =
     when {
       isMediaTarget -> voltColors.amberAccent
-      !target.linkUrl.isNullOrBlank() -> voltColors.cyanAccent
+      !target.linkUrl.isNullOrBlank() -> voltColors.brandAccent
       else -> voltColors.emeraldShield
     }
   val headerTitle =
@@ -129,22 +124,21 @@ fun WebContextMenuSheet(
           .padding(bottom = 20.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      // Context Header Card
       Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         color = voltColors.cardSurface,
         border = BorderStroke(1.dp, voltColors.cardBorder),
         modifier = Modifier.fillMaxWidth().testTag("context_menu_header"),
       ) {
         Row(
-          modifier = Modifier.fillMaxWidth().padding(12.dp),
+          modifier = Modifier.fillMaxWidth().padding(14.dp),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           Box(
             modifier =
-              Modifier.size(38.dp)
-                .clip(CircleShape)
+              Modifier.size(40.dp)
+                .clip(RoundedCornerShape(12.dp))
                 .background(headerTint.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
           ) {
@@ -152,13 +146,13 @@ fun WebContextMenuSheet(
               imageVector = headerIcon,
               contentDescription = null,
               tint = headerTint,
-              modifier = Modifier.size(20.dp),
+              modifier = Modifier.size(22.dp),
             )
           }
           Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
               text = headerTitle,
-              style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+              style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
               color = MaterialTheme.colorScheme.onSurface,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
@@ -179,7 +173,7 @@ fun WebContextMenuSheet(
               Icon(
                 imageVector = Icons.Default.ContentCopy,
                 contentDescription = "Copy address",
-                tint = voltColors.cyanAccent,
+                tint = voltColors.brandAccent,
                 modifier = Modifier.size(18.dp),
               )
             }
@@ -187,7 +181,6 @@ fun WebContextMenuSheet(
         }
       }
 
-      // 1. Media Actions (Play in Internal Media3 Player, Open External, Download Media)
       if (isMediaTarget) {
         val mUrl = target.mediaUrl!!
         ContextMenuActionRow(
@@ -204,7 +197,7 @@ fun WebContextMenuSheet(
           icon = Icons.AutoMirrored.Filled.OpenInNew,
           title = "Open in External Player",
           subtitle = "Send stream to VLC, MX, or installed media apps",
-          accentColor = voltColors.cyanAccent,
+          accentColor = voltColors.brandAccent,
           onClick = {
             onOpenMediaExternal(mUrl, target.mediaTitle, target.mediaKind, target.pageUrl)
           },
@@ -230,7 +223,6 @@ fun WebContextMenuSheet(
         }
       }
 
-      // 2. Standard Link Navigation Actions
       val navUrl = target.linkUrl ?: target.mediaUrl?.takeIf { isHttpMedia }
       if (!navUrl.isNullOrBlank()) {
         val canTabOpen = navUrl.startsWith("http://", true) || navUrl.startsWith("https://", true)
@@ -238,7 +230,7 @@ fun WebContextMenuSheet(
           if (isMediaTarget) {
             HorizontalDivider(
               modifier = Modifier.padding(vertical = 2.dp),
-              color = MaterialTheme.colorScheme.outlineVariant,
+              color = voltColors.cardBorder,
             )
           }
           ContextMenuActionRow(
@@ -254,7 +246,7 @@ fun WebContextMenuSheet(
           ContextMenuActionRow(
             icon = Icons.Default.AddToQueue,
             title = "Open in New Tab",
-            accentColor = voltColors.cyanAccent,
+            accentColor = voltColors.brandAccent,
             onClick = {
               onDismiss()
               onOpenNewTab(navUrl, false)
@@ -318,19 +310,18 @@ fun WebContextMenuSheet(
         )
       }
 
-      // 3. Image Actions (standalone image or image inside an anchor link)
       if (hasImage) {
         val imgUrl = target.imageUrl!!
         if (!navUrl.isNullOrBlank() || isMediaTarget) {
           HorizontalDivider(
             modifier = Modifier.padding(vertical = 2.dp),
-            color = MaterialTheme.colorScheme.outlineVariant,
+            color = voltColors.cardBorder,
           )
         }
         ContextMenuActionRow(
           icon = Icons.Default.Image,
           title = "Open Image in New Tab",
-          accentColor = voltColors.cyanAccent,
+          accentColor = voltColors.brandAccent,
           onClick = {
             onDismiss()
             onOpenNewTab(imgUrl, false)
@@ -365,15 +356,14 @@ fun WebContextMenuSheet(
         }
       }
 
-      // 4. Optional Speed Dial Remove action
       if (target.bookmarkId != null && onDeleteBookmark != null) {
         HorizontalDivider(
           modifier = Modifier.padding(vertical = 2.dp),
-          color = MaterialTheme.colorScheme.outlineVariant,
+          color = voltColors.cardBorder,
         )
         ContextMenuActionRow(
           icon = Icons.Default.DeleteOutline,
-          title = "Remove from Speed Dial",
+          title = "Remove from Workspace",
           accentColor = MaterialTheme.colorScheme.error,
           onClick = {
             onDeleteBookmark(target.bookmarkId)
@@ -397,9 +387,11 @@ private fun ContextMenuActionRow(
   testTag: String,
   subtitle: String? = null,
 ) {
+  val voltColors = LocalVoltColors.current
   Surface(
     shape = RoundedCornerShape(14.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerLow,
+    color = voltColors.cardSurface,
+    border = BorderStroke(1.dp, voltColors.cardBorder.copy(alpha = 0.6f)),
     modifier =
       Modifier.fillMaxWidth()
         .minimumInteractiveComponentSize()

@@ -182,25 +182,11 @@ data class BrowserTabState(
 )
 
 enum class AppThemeMode(val displayName: String) {
-  CYBER_OBSIDIAN("Cyber Obsidian"),
-  ZEN_LIGHT("Zen Light"),
-}
-
-enum class AdBlockerType(
-  val displayName: String,
-  val badgeLabel: String,
-  val subtitle: String,
-) {
-  OFF("Disabled", "OFF", "No ad, tracker, or cosmetic filtering"),
-  STANDARD("Standard Shield", "STD", "Fast core ad & tracker domain blocklist"),
-  ADGUARD("AdGuard Filter", "ADG", "AdGuard network rules, telemetry & cosmetic ad hiding"),
-  STRICT("Strict Anti-Popup", "MAX", "AdGuard + popup traps, cookie nags & anti-adblock overlays"),
-  STEALTH("Stealth Mode", "STH", "Strict tracker blocking with DNT/GPC signals"),
+  CYBER_OBSIDIAN("Graphite Ember"),
+  ZEN_LIGHT("Alabaster Paper"),
 }
 
 data class BrowserSettings(
-  val turboShieldEnabled: Boolean = true,
-  val adBlockerType: AdBlockerType = AdBlockerType.ADGUARD,
   val liteModeEnabled: Boolean = false,
   val httpsOnlyEnabled: Boolean = false,
   val darkWebEnabled: Boolean = true,

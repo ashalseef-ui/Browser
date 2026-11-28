@@ -66,18 +66,17 @@ fun OmniboxQuickBar(
 
   Surface(
     modifier = modifier.fillMaxWidth().testTag("omnibox_quick_bar"),
-    color = MaterialTheme.colorScheme.surfaceContainerLow,
+    color = voltColors.dockSurface,
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-      // Firefox-style Horizontal Swipeable Search Engine Selector Bar
       Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         LazyRow(
           state = engineListState,
           modifier = Modifier.weight(1f),
-          contentPadding = PaddingValues(horizontal = 8.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -85,18 +84,18 @@ fun OmniboxQuickBar(
             val selected = engine == activeEngine
             val accent = engine.badgeAccentColor(voltColors.isLightTheme)
             Surface(
-              shape = RoundedCornerShape(100.dp),
+              shape = RoundedCornerShape(14.dp),
               color =
-                if (selected) accent.copy(alpha = 0.18f)
-                else MaterialTheme.colorScheme.surfaceContainerHigh,
+                if (selected) accent.copy(alpha = 0.16f)
+                else voltColors.cardSurface,
               border =
                 BorderStroke(
                   width = if (selected) 1.5.dp else 1.dp,
-                  color = if (selected) accent else MaterialTheme.colorScheme.outlineVariant,
+                  color = if (selected) accent else voltColors.cardBorder,
                 ),
               modifier =
                 Modifier.minimumInteractiveComponentSize()
-                  .clip(RoundedCornerShape(100.dp))
+                  .clip(RoundedCornerShape(14.dp))
                   .combinedClickable(
                     onClick = {
                       haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -110,7 +109,7 @@ fun OmniboxQuickBar(
                   .testTag("omnibox_engine_chip_${engine.name.lowercase()}"),
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
               ) {
@@ -118,7 +117,7 @@ fun OmniboxQuickBar(
                   modifier =
                     Modifier.size(22.dp)
                       .clip(CircleShape)
-                      .background(accent.copy(alpha = if (selected) 0.92f else 0.22f)),
+                      .background(accent.copy(alpha = if (selected) 0.94f else 0.18f)),
                   contentAlignment = Alignment.Center,
                 ) {
                   Text(
@@ -132,7 +131,7 @@ fun OmniboxQuickBar(
                     color =
                       if (selected) {
                         if (voltColors.isLightTheme || accent.luminanceApprox() < 0.55f) Color.White
-                        else Color(0xFF090D14)
+                        else Color(0xFF141417)
                       } else {
                         accent
                       },
@@ -143,7 +142,8 @@ fun OmniboxQuickBar(
                 Text(
                   text = engine.shortLabel,
                   style =
-                    MaterialTheme.typography.labelMedium.copy(
+                    MaterialTheme.typography.labelLarge.copy(
+                      fontSize = 12.sp,
                       fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     ),
                   color =
@@ -172,7 +172,7 @@ fun OmniboxQuickBar(
         }
       }
 
-      HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+      HorizontalDivider(thickness = 0.5.dp, color = voltColors.cardBorder.copy(alpha = 0.6f))
     }
   }
 }

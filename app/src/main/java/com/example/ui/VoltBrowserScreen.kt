@@ -41,7 +41,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
@@ -90,6 +90,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.WebContextMenuTarget
 import com.example.ui.components.EdgeGestureOverlay
 import com.example.ui.components.OmniboxDock
 import com.example.ui.components.extractHost
@@ -103,7 +104,6 @@ import com.example.ui.screens.MiniMediaPlayerBar
 import com.example.ui.screens.SecurityTelemetrySheet
 import com.example.ui.screens.SocialSidebarOverlay
 import com.example.ui.screens.SpeedDialHome
-import com.example.data.WebContextMenuTarget
 import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.WebContextMenuSheet
 import com.example.ui.theme.LocalVoltColors
@@ -187,7 +187,6 @@ fun VoltBrowserScreen(
     }
   }
 
-  // Contextual notification permission request when starting media playback on Android 13+
   var askedNotificationPermission by remember { mutableStateOf(false) }
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
@@ -225,7 +224,6 @@ fun VoltBrowserScreen(
     viewModel.clearMessage()
   }
 
-  // Hierarchical Back Navigation
   BackHandler(
     enabled =
       contextMenuTarget != null ||
@@ -298,9 +296,7 @@ fun VoltBrowserScreen(
                 previousTabTitle = previousTabTitle,
                 nextTabTitle = nextTabTitle,
                 searchEngine = settings.searchEngine,
-                adBlockerType = settings.adBlockerType,
                 isVpnActive = vpnState.isAnyProtectionActive,
-                sessionDataUsedBytes = sessionDataUsedBytes,
                 showBottomNavControls = true,
                 onNavigate = viewModel::navigate,
                 onQueryChange = viewModel::onOmniboxQueryChanged,
@@ -317,7 +313,6 @@ fun VoltBrowserScreen(
                 onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
                 onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
                 onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
-                onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
                 onShowToast = viewModel::showMessage,
                 onSwipeLeft = viewModel::switchToNextTab,
                 onSwipeRight = viewModel::switchToPreviousTab,
@@ -329,352 +324,358 @@ fun VoltBrowserScreen(
       containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
       Row(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding())) {
-        // Adaptive Tablet / Foldable NavigationRail (hidden in fullscreen or PiP)
         if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
           NavigationRail(
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = voltColors.dockSurface,
             modifier =
               Modifier.statusBarsPadding().let {
                 if (!bottomBarConsumesNavInset) it.navigationBarsPadding() else it
               },
           ) {
-              Spacer(modifier = Modifier.weight(0.2f))
-              NavigationRailItem(
-                selected = activeTab.isSpeedDial,
-                onClick = { viewModel.goHome() },
-                icon = { Icon(Icons.Default.Home, contentDescription = stringResource(R.string.cd_home)) },
-                label = { Text("Home") },
-              )
-              NavigationRailItem(
-                selected = false,
-                onClick = { viewModel.goBack() },
-                enabled = !activeTab.isSpeedDial,
-                icon = {
-                  Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.cd_back),
-                  )
-                },
-                label = { Text("Back") },
-              )
-              NavigationRailItem(
-                selected = false,
-                onClick = { viewModel.goForward() },
-                enabled = activeTab.canGoForward,
-                icon = {
-                  Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = stringResource(R.string.cd_forward),
-                  )
-                },
-                label = { Text("Fwd") },
-              )
-              NavigationRailItem(
-                selected = activeSheet == BrowserSheet.TAB_SWITCHER,
-                onClick = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
-                icon = {
-                  BadgedBox(badge = { Badge { Text("${tabs.size}") } }) {
-                    Icon(Icons.Default.Layers, contentDescription = stringResource(R.string.cd_tabs))
-                  }
-                },
-                label = { Text("Tabs") },
-              )
-              NavigationRailItem(
-                selected = activeSheet == BrowserSheet.MEDIA_HUB,
-                onClick = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
-                icon = {
-                  BadgedBox(
-                    badge = {
-                      if (activeTab.detectedMedia.isNotEmpty()) {
-                        Badge { Text("${activeTab.detectedMedia.size}") }
-                      }
+            Spacer(modifier = Modifier.weight(0.2f))
+            NavigationRailItem(
+              selected = activeTab.isSpeedDial,
+              onClick = { viewModel.goHome() },
+              icon = { Icon(Icons.Default.Home, contentDescription = stringResource(R.string.cd_home)) },
+              label = { Text("Start") },
+            )
+            NavigationRailItem(
+              selected = false,
+              onClick = { viewModel.goBack() },
+              enabled = !activeTab.isSpeedDial,
+              icon = {
+                Icon(
+                  Icons.AutoMirrored.Filled.ArrowBack,
+                  contentDescription = stringResource(R.string.cd_back),
+                )
+              },
+              label = { Text("Back") },
+            )
+            NavigationRailItem(
+              selected = false,
+              onClick = { viewModel.goForward() },
+              enabled = activeTab.canGoForward,
+              icon = {
+                Icon(
+                  Icons.AutoMirrored.Filled.ArrowForward,
+                  contentDescription = stringResource(R.string.cd_forward),
+                )
+              },
+              label = { Text("Fwd") },
+            )
+            NavigationRailItem(
+              selected = activeSheet == BrowserSheet.TAB_SWITCHER,
+              onClick = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
+              icon = {
+                BadgedBox(badge = { Badge { Text("${tabs.size}") } }) {
+                  Icon(Icons.Default.Layers, contentDescription = stringResource(R.string.cd_tabs))
+                }
+              },
+              label = { Text("Deck") },
+            )
+            NavigationRailItem(
+              selected = activeSheet == BrowserSheet.MEDIA_HUB,
+              onClick = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
+              icon = {
+                BadgedBox(
+                  badge = {
+                    if (activeTab.detectedMedia.isNotEmpty()) {
+                      Badge { Text("${activeTab.detectedMedia.size}") }
                     }
-                  ) {
-                    Icon(
-                      Icons.Default.VideoLibrary,
-                      contentDescription = stringResource(R.string.cd_media_detected),
-                    )
                   }
-                },
-                label = { Text("Media") },
-              )
-              NavigationRailItem(
-                selected = activeSheet == BrowserSheet.VPN,
-                onClick = { viewModel.onVpnSheetOpened() },
-                icon = {
+                ) {
                   Icon(
-                    Icons.Default.Public,
-                    contentDescription = stringResource(R.string.cd_vpn_status),
-                    tint =
-                      if (vpnState.isAnyProtectionActive) voltColors.emeraldShield
-                      else MaterialTheme.colorScheme.onSurfaceVariant,
+                    Icons.Default.VideoLibrary,
+                    contentDescription = stringResource(R.string.cd_media_detected),
                   )
-                },
-                label = { Text("Proxy") },
-              )
-              NavigationRailItem(
-                selected = activeSheet == BrowserSheet.LIBRARY_SETTINGS,
-                onClick = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
-                icon = { Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.cd_menu)) },
-                label = { Text("Menu") },
-              )
-              Spacer(modifier = Modifier.weight(1f))
-              NavigationRailItem(
-                selected = activeSheet == BrowserSheet.EXIT_CONFIRM,
-                onClick = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
-                icon = {
-                  Icon(
-                    Icons.Default.PowerSettingsNew,
-                    contentDescription = stringResource(R.string.cd_exit),
-                    tint = MaterialTheme.colorScheme.error,
-                  )
-                },
-                label = { Text("Exit", color = MaterialTheme.colorScheme.error) },
-                modifier = Modifier.testTag("rail_exit_button"),
-              )
-            }
+                }
+              },
+              label = { Text("Media") },
+            )
+            NavigationRailItem(
+              selected = activeSheet == BrowserSheet.VPN,
+              onClick = { viewModel.onVpnSheetOpened() },
+              icon = {
+                Icon(
+                  Icons.Default.Public,
+                  contentDescription = stringResource(R.string.cd_vpn_status),
+                  tint =
+                    if (vpnState.isAnyProtectionActive) voltColors.emeraldShield
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              },
+              label = { Text("Tunnel") },
+            )
+            NavigationRailItem(
+              selected = activeSheet == BrowserSheet.LIBRARY_SETTINGS,
+              onClick = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
+              icon = { Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.cd_menu)) },
+              label = { Text("Menu") },
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            NavigationRailItem(
+              selected = activeSheet == BrowserSheet.EXIT_CONFIRM,
+              onClick = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+              icon = {
+                Icon(
+                  Icons.Default.PowerSettingsNew,
+                  contentDescription = stringResource(R.string.cd_exit),
+                  tint = MaterialTheme.colorScheme.error,
+                )
+              },
+              label = { Text("Exit", color = MaterialTheme.colorScheme.error) },
+              modifier = Modifier.testTag("rail_exit_button"),
+            )
+          }
+        }
+
+        Column(
+          modifier =
+            Modifier.weight(1f)
+              .fillMaxHeight()
+              .let {
+                when {
+                  isAnyFullscreen -> it
+                  bottomBarConsumesNavInset -> it.statusBarsPadding()
+                  else -> it.statusBarsPadding().navigationBarsPadding()
+                }
+              }
+              .let { if (!isWideScreen && !bottomBarConsumesNavInset) it.imePadding() else it }
+        ) {
+          if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
+            OmniboxDock(
+              tab = activeTab,
+              tabCount = tabs.size,
+              previousTabTitle = previousTabTitle,
+              nextTabTitle = nextTabTitle,
+              searchEngine = settings.searchEngine,
+              isVpnActive = vpnState.isAnyProtectionActive,
+              showBottomNavControls = false,
+              onNavigate = viewModel::navigate,
+              onQueryChange = viewModel::onOmniboxQueryChanged,
+              onSelectSearchEngine = viewModel::setSearchEngine,
+              onCycleSearchEngine = viewModel::cycleSearchEngine,
+              onBack = { viewModel.goBack() },
+              onForward = viewModel::goForward,
+              onReloadOrStop = viewModel::reloadOrStop,
+              onHardReload = viewModel::hardReloadActiveTab,
+              onHome = viewModel::goHome,
+              onNewPrivateTab = { viewModel.newTab(isIncognito = true) },
+              onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
+              onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
+              onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
+              onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
+              onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
+              onShowToast = viewModel::showMessage,
+              onSwipeLeft = viewModel::switchToNextTab,
+              onSwipeRight = viewModel::switchToPreviousTab,
+            )
           }
 
-          // Primary Browser Column
-          Column(
-            modifier =
-              Modifier.weight(1f)
-                .fillMaxHeight()
-                .let {
-                  when {
-                    isAnyFullscreen -> it
-                    bottomBarConsumesNavInset -> it.statusBarsPadding()
-                    else -> it.statusBarsPadding().navigationBarsPadding()
-                  }
-                }
-                .let { if (!isWideScreen && !bottomBarConsumesNavInset) it.imePadding() else it }
-          ) {
-            // Top Omnibox on Wide Screens
-            if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
-              OmniboxDock(
-                tab = activeTab,
-                tabCount = tabs.size,
-                previousTabTitle = previousTabTitle,
-                nextTabTitle = nextTabTitle,
-                searchEngine = settings.searchEngine,
-                adBlockerType = settings.adBlockerType,
-                isVpnActive = vpnState.isAnyProtectionActive,
+          AnimatedVisibility(visible = findInPageVisible && !activeTab.isSpeedDial) {
+            FindInPageBar(
+              onQueryChange = { viewModel.findInPage(it, forward = true) },
+              onFindNext = { q -> viewModel.findInPage(q, forward = true) },
+              onFindPrev = { q -> viewModel.findInPage(q, forward = false) },
+              onClose = { viewModel.toggleFindInPage(false) },
+            )
+          }
+
+          Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (activeTab.isSpeedDial) {
+              SpeedDialHome(
+                isIncognito = activeTab.isIncognito,
+                settings = settings,
                 sessionDataUsedBytes = sessionDataUsedBytes,
-                showBottomNavControls = false,
-                onNavigate = viewModel::navigate,
-                onQueryChange = viewModel::onOmniboxQueryChanged,
-                onSelectSearchEngine = viewModel::setSearchEngine,
-                onCycleSearchEngine = viewModel::cycleSearchEngine,
-                onBack = { viewModel.goBack() },
-                onForward = viewModel::goForward,
-                onReloadOrStop = viewModel::reloadOrStop,
-                onHardReload = viewModel::hardReloadActiveTab,
-                onHome = viewModel::goHome,
+                isVpnActive = vpnState.isAnyProtectionActive,
+                speedDialItems = speedDialItems,
+                onOpenUrl = { url -> viewModel.navigate(url, null) },
+                onPrewarmUrl = viewModel.speedEngine::prewarmOrigin,
                 onNewPrivateTab = { viewModel.newTab(isIncognito = true) },
                 onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
                 onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
-                onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
-                onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
-                onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
                 onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
-                onShowToast = viewModel::showMessage,
-                onSwipeLeft = viewModel::switchToNextTab,
-                onSwipeRight = viewModel::switchToPreviousTab,
-              )
-            }
-
-            // Find in Page Bar
-            AnimatedVisibility(visible = findInPageVisible && !activeTab.isSpeedDial) {
-              FindInPageBar(
-                onQueryChange = { viewModel.findInPage(it, forward = true) },
-                onFindNext = { q -> viewModel.findInPage(q, forward = true) },
-                onFindPrev = { q -> viewModel.findInPage(q, forward = false) },
-                onClose = { viewModel.toggleFindInPage(false) },
-              )
-            }
-
-            // Viewport: Speed Dial OR Live WebView
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-              if (activeTab.isSpeedDial) {
-                SpeedDialHome(
-                  isIncognito = activeTab.isIncognito,
-                  settings = settings,
-                  speedDialItems = speedDialItems,
-                  onOpenUrl = viewModel::navigate,
-                  onPrewarmUrl = viewModel.speedEngine::prewarmOrigin,
-                  onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
-                  onAddSpeedDialClick = { viewModel.openSheet(BrowserSheet.ADD_SPEED_DIAL) },
-                  onLongPressTile = { bookmark ->
-                    viewModel.showContextMenu(
-                      WebContextMenuTarget(
-                        pageUrl = "",
-                        linkUrl = bookmark.url,
-                        linkText = bookmark.title,
-                        bookmarkId = bookmark.id,
-                      )
+                onAddSpeedDialClick = { viewModel.openSheet(BrowserSheet.ADD_SPEED_DIAL) },
+                onLongPressTile = { bookmark ->
+                  viewModel.showContextMenu(
+                    WebContextMenuTarget(
+                      pageUrl = "",
+                      linkUrl = bookmark.url,
+                      linkText = bookmark.title,
+                      bookmarkId = bookmark.id,
                     )
-                  },
-                )
-              } else {
-                EdgeGestureOverlay(
-                  enabled = !isBrowserFullscreen && !isInPipMode,
-                  canGoBack = activeTab.canGoBack,
-                  canGoForward = activeTab.canGoForward,
-                  onSwipeBack = { viewModel.goBack() },
-                  onSwipeForward = viewModel::goForward,
-                  modifier = Modifier.fillMaxSize(),
-                ) {
-                  AndroidView(
-                    factory = { ctx -> FrameLayout(ctx) },
-                    update = { container ->
-                      val wv =
-                        viewModel.webViewPool.getOrCreateWebView(
-                          tabId = activeTab.id,
-                          isIncognito = activeTab.isIncognito,
-                          callbacks = viewModel.tabWebCallbacks,
-                          fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
-                        )
-                      if (container.childCount != 1 || container.getChildAt(0) !== wv) {
-                        container.removeAllViews()
-                        (wv.parent as? ViewGroup)?.removeView(wv)
-                        container.addView(
-                          wv,
-                          FrameLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                          ),
-                        )
-                      }
-                    },
-                    modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
                   )
-                }
+                },
+              )
+            } else {
+              EdgeGestureOverlay(
+                enabled = !isBrowserFullscreen && !isInPipMode,
+                canGoBack = activeTab.canGoBack,
+                canGoForward = activeTab.canGoForward,
+                onSwipeBack = { viewModel.goBack() },
+                onSwipeForward = viewModel::goForward,
+                modifier = Modifier.fillMaxSize(),
+              ) {
+                AndroidView(
+                  factory = { ctx -> FrameLayout(ctx) },
+                  update = { container ->
+                    val wv =
+                      viewModel.webViewPool.getOrCreateWebView(
+                        tabId = activeTab.id,
+                        isIncognito = activeTab.isIncognito,
+                        callbacks = viewModel.tabWebCallbacks,
+                        fallbackUrl = activeTab.url.takeIf { it.isNotBlank() },
+                      )
+                    if (container.childCount != 1 || container.getChildAt(0) !== wv) {
+                      container.removeAllViews()
+                      (wv.parent as? ViewGroup)?.removeView(wv)
+                      container.addView(
+                        wv,
+                        FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                      )
+                    }
+                  },
+                  modifier = Modifier.fillMaxSize().testTag("active_webview_container"),
+                )
+              }
 
-                activeTab.httpsWarning?.let { warning ->
-                  Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxSize().testTag("https_warning_overlay"),
+              activeTab.httpsWarning?.let { warning ->
+                Surface(
+                  color = MaterialTheme.colorScheme.background,
+                  modifier = Modifier.fillMaxSize().testTag("https_warning_overlay"),
+                ) {
+                  Column(
+                    modifier =
+                      Modifier.fillMaxSize()
+                        .padding(horizontal = 24.dp, vertical = 32.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
                   ) {
-                    Column(
-                      modifier =
-                        Modifier.fillMaxSize()
-                          .padding(horizontal = 24.dp, vertical = 32.dp),
-                      verticalArrangement = Arrangement.Center,
-                      horizontalAlignment = Alignment.CenterHorizontally,
+                    Surface(
+                      shape = RoundedCornerShape(22.dp),
+                      color = voltColors.amberAccent.copy(alpha = 0.14f),
+                      border = BorderStroke(1.dp, voltColors.amberAccent.copy(alpha = 0.45f)),
+                      modifier = Modifier.size(72.dp),
                     ) {
-                      Icon(
-                        imageVector = Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = voltColors.amberAccent,
-                        modifier = Modifier.size(48.dp),
-                      )
-                      Spacer(modifier = Modifier.size(16.dp))
-                      Text(
-                        text =
-                          if (warning.isPublicProxyWarning) "Unencrypted HTTP Over Public Proxy"
-                          else "HTTPS Connection Unavailable",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                      )
-                      Spacer(modifier = Modifier.size(10.dp))
-                      Text(
-                        text =
-                          if (warning.isPublicProxyWarning) {
-                            "${extractHost(warning.fallbackHttpUrl)} uses plain HTTP. ${warning.reason}"
-                          } else {
-                            "HTTPS-Only Mode could not load ${extractHost(warning.fallbackHttpUrl)} over HTTPS (${warning.reason})."
-                          },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      )
-                      Spacer(modifier = Modifier.size(24.dp))
-                      if (warning.isPublicProxyWarning) {
-                        Button(
-                          onClick = {
-                            viewModel.tryHttpsInstead(activeTab.id, warning.failedUrl)
-                          },
-                          modifier = Modifier.fillMaxWidth().testTag("try_https_button"),
-                        ) {
-                          Text("Try HTTPS Instead")
-                        }
-                        Spacer(modifier = Modifier.size(10.dp))
-                      }
-                      OutlinedButton(
-                        onClick = { viewModel.dismissHttpsWarning(activeTab.id) },
-                        modifier = Modifier.fillMaxWidth().testTag("https_warning_back_button"),
-                      ) {
-                        Text("Go Back")
-                      }
-                      Spacer(modifier = Modifier.size(8.dp))
-                      TextButton(
-                        onClick = {
-                          viewModel.proceedWithInsecureHttp(activeTab.id, warning.fallbackHttpUrl)
-                        },
-                        modifier = Modifier.testTag("continue_http_button"),
-                      ) {
-                        Text(
-                          text = "Continue Anyway (Insecure HTTP)",
-                          color = MaterialTheme.colorScheme.error,
+                      Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                          imageVector = Icons.Default.Warning,
+                          contentDescription = null,
+                          tint = voltColors.amberAccent,
+                          modifier = Modifier.size(36.dp),
                         )
                       }
+                    }
+                    Spacer(modifier = Modifier.size(20.dp))
+                    Text(
+                      text =
+                        if (warning.isPublicProxyWarning) "Unencrypted HTTP Over Public Proxy"
+                        else "HTTPS Connection Unavailable",
+                      style = MaterialTheme.typography.headlineSmall,
+                      color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.size(10.dp))
+                    Text(
+                      text =
+                        if (warning.isPublicProxyWarning) {
+                          "${extractHost(warning.fallbackHttpUrl)} uses plain HTTP. ${warning.reason}"
+                        } else {
+                          "HTTPS-Only Mode could not load ${extractHost(warning.fallbackHttpUrl)} over HTTPS (${warning.reason})."
+                        },
+                      style = MaterialTheme.typography.bodyMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.size(24.dp))
+                    if (warning.isPublicProxyWarning) {
+                      Button(
+                        onClick = {
+                          viewModel.tryHttpsInstead(activeTab.id, warning.failedUrl)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("try_https_button"),
+                      ) {
+                        Text("Try HTTPS Instead")
+                      }
+                      Spacer(modifier = Modifier.size(10.dp))
+                    }
+                    OutlinedButton(
+                      onClick = { viewModel.dismissHttpsWarning(activeTab.id) },
+                      shape = RoundedCornerShape(14.dp),
+                      modifier = Modifier.fillMaxWidth().testTag("https_warning_back_button"),
+                    ) {
+                      Text("Go Back")
+                    }
+                    Spacer(modifier = Modifier.size(8.dp))
+                    TextButton(
+                      onClick = {
+                        viewModel.proceedWithInsecureHttp(activeTab.id, warning.fallbackHttpUrl)
+                      },
+                      modifier = Modifier.testTag("continue_http_button"),
+                    ) {
+                      Text(
+                        text = "Continue Anyway (Insecure HTTP)",
+                        color = MaterialTheme.colorScheme.error,
+                      )
                     }
                   }
                 }
               }
+            }
 
-              if (!isInPipMode) {
-                SocialSidebarOverlay(
-                  isOpen = socialSidebarOpen,
-                  socialApps = socialApps,
-                  hasSystemAutofill = hasSystemAutofill,
-                  onToggleSidebar = viewModel::toggleSocialSidebar,
-                  onDismiss = viewModel::closeSocialSidebar,
-                  onOpenInBrowser = viewModel::openSocialInBrowser,
-                  onLaunchInstalledApp = viewModel::launchInstalledSocialApp,
-                  onTriggerAutofill = viewModel::triggerSocialAutofill,
-                  onOpenAutofillSettings = viewModel::openDeviceAutofillSettings,
-                )
-              }
+            if (!isInPipMode) {
+              SocialSidebarOverlay(
+                isOpen = socialSidebarOpen,
+                socialApps = socialApps,
+                hasSystemAutofill = hasSystemAutofill,
+                onToggleSidebar = viewModel::toggleSocialSidebar,
+                onDismiss = viewModel::closeSocialSidebar,
+                onOpenInBrowser = viewModel::openSocialInBrowser,
+                onLaunchInstalledApp = viewModel::launchInstalledSocialApp,
+                onTriggerAutofill = viewModel::triggerSocialAutofill,
+                onOpenAutofillSettings = viewModel::openDeviceAutofillSettings,
+              )
+            }
 
-              // Floating translucent pill to exit Browser Fullscreen
-              if (isBrowserFullscreen && fullscreenCustomView == null && !isInPipMode) {
-                Surface(
-                  shape = RoundedCornerShape(100.dp),
-                  color = Color(0xCC090D14),
-                  border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.55f)),
-                  shadowElevation = 6.dp,
-                  modifier =
-                    Modifier.align(Alignment.TopEnd)
-                      .padding(top = 12.dp, end = 12.dp)
-                      .clip(RoundedCornerShape(100.dp))
-                      .clickable { viewModel.toggleBrowserFullscreen(false) }
-                      .testTag("exit_fullscreen_button"),
+            if (isBrowserFullscreen && fullscreenCustomView == null && !isInPipMode) {
+              Surface(
+                shape = RoundedCornerShape(100.dp),
+                color = Color(0xCC121216),
+                border = BorderStroke(1.dp, voltColors.brandAccent.copy(alpha = 0.65f)),
+                shadowElevation = 6.dp,
+                modifier =
+                  Modifier.align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 12.dp)
+                    .clip(RoundedCornerShape(100.dp))
+                    .clickable { viewModel.toggleBrowserFullscreen(false) }
+                    .testTag("exit_fullscreen_button"),
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.FullscreenExit,
-                      contentDescription = "Exit fullscreen",
-                      tint = voltColors.cyanAccent,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                      text = "Exit Fullscreen",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = Color.White,
-                    )
-                  }
+                  Icon(
+                    imageVector = Icons.Default.FullscreenExit,
+                    contentDescription = "Exit fullscreen",
+                    tint = voltColors.brandAccent,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = "Exit Fullscreen",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                  )
                 }
               }
             }
           }
         }
+      }
     }
 
-    // Visual Tab Switcher Overlay
     AnimatedVisibility(visible = activeSheet == BrowserSheet.TAB_SWITCHER && !isInPipMode) {
       TabSwitcherOverlay(
         tabs = tabs,
@@ -687,7 +688,6 @@ fun VoltBrowserScreen(
       )
     }
 
-    // Native Media3 Fullscreen / PiP Cinema Player Overlay
     AnimatedVisibility(visible = mediaState.isVisible && !mediaState.isMinimized) {
       MediaPlayerOverlay(
         state = mediaState,
@@ -716,7 +716,6 @@ fun VoltBrowserScreen(
       )
     }
 
-    // HTML5 WebView Fullscreen Custom View
     fullscreenCustomView?.let { (customView, _) ->
       Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
@@ -739,7 +738,6 @@ fun VoltBrowserScreen(
       }
     }
 
-    // Sheets & Dialogs
     when (activeSheet) {
       BrowserSheet.MEDIA_HUB -> {
         MediaHubSheet(
@@ -790,7 +788,6 @@ fun VoltBrowserScreen(
           tab = activeTab,
           settings = settings,
           sessionDataUsedBytes = sessionDataUsedBytes,
-          onSelectAdBlockerType = viewModel::setAdBlockerType,
           onToggleLiteMode = viewModel::toggleLiteMode,
           onToggleHttpsOnly = viewModel::toggleHttpsOnly,
           onToggleDarkWeb = viewModel::toggleDarkWeb,
@@ -805,6 +802,7 @@ fun VoltBrowserScreen(
           activeTab = activeTab,
           isBookmarked = isBookmarked,
           isBrowserFullscreen = isBrowserFullscreen,
+          sessionDataUsedBytes = sessionDataUsedBytes,
           settings = settings,
           bookmarks = bookmarks,
           onToggleBookmark = viewModel::toggleBookmark,
@@ -813,6 +811,7 @@ fun VoltBrowserScreen(
           onToggleDesktopMode = viewModel::toggleDesktopMode,
           onToggleBrowserFullscreen = { viewModel.toggleBrowserFullscreen() },
           onOpenSecuritySheet = { viewModel.openSheet(BrowserSheet.SECURITY_TELEMETRY) },
+          onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
           onOpenUrl = viewModel::navigate,
           onDeleteBookmark = viewModel::deleteBookmark,
           onToggleLiteMode = viewModel::toggleLiteMode,
@@ -886,7 +885,6 @@ fun VoltBrowserScreen(
       else -> Unit
     }
 
-    // Long-Press ("Right-Click") Context Menu Sheet for links, images, and media
     contextMenuTarget?.let { target ->
       WebContextMenuSheet(
         target = target,
@@ -907,14 +905,13 @@ fun VoltBrowserScreen(
         onShareUrl = viewModel::shareUrl,
         onDeleteBookmark = { id ->
           viewModel.deleteBookmark(id)
-          viewModel.showMessage("Removed from Speed Dial")
+          viewModel.showMessage("Removed from Workspace")
         },
         onCopiedToast = { msg -> viewModel.showMessage(msg) },
         onDismiss = viewModel::dismissContextMenu,
       )
     }
 
-    // Per-Site Permission Prompt (Camera, Microphone, Location)
     pendingSitePermissionPrompt?.let { prompt ->
       val permLabels = prompt.requestedTypes.joinToString(", ") { it.label }
       AlertDialog(
@@ -925,7 +922,7 @@ fun VoltBrowserScreen(
           Icon(
             imageVector = Icons.Default.Security,
             contentDescription = null,
-            tint = voltColors.cyanAccent,
+            tint = voltColors.brandAccent,
           )
         },
         title = { Text("Permission Request") },
@@ -995,17 +992,19 @@ private fun FindInPageBar(
   var query by remember { mutableStateOf("") }
 
   Surface(
-    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    color = voltColors.dockSurface,
+    border = BorderStroke(1.dp, voltColors.cardBorder.copy(alpha = 0.6f)),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(14.dp),
+        color = voltColors.omniboxSurface,
+        border = BorderStroke(1.dp, voltColors.cardBorder),
         modifier = Modifier.weight(1f),
       ) {
         Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -1027,7 +1026,7 @@ private fun FindInPageBar(
               MaterialTheme.typography.bodyMedium.copy(
                 color = MaterialTheme.colorScheme.onSurface
               ),
-            cursorBrush = SolidColor(voltColors.cyanAccent),
+            cursorBrush = SolidColor(voltColors.brandAccent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onFindNext(query) }),
             modifier = Modifier.fillMaxWidth(),

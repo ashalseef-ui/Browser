@@ -7,7 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.browser.DeviceTraceCleaner
 import com.example.browser.MediaSniffer
 import com.example.browser.PlaylistResolver
-import com.example.browser.TurboShield
+
 import com.example.browser.VoltSpeedEngine
 import com.example.browser.WebViewTabPool
 import com.example.data.DetectedMediaItem
@@ -41,30 +41,6 @@ class ExampleRobolectricTest {
     assertEquals("Volt Browser", appName)
   }
 
-  @Test
-  fun `turbo shield blocks known tracker subdomains and respects blocker tiers`() {
-    assertTrue(TurboShield.shouldBlock(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js")))
-    assertTrue(TurboShield.shouldBlock(Uri.parse("https://www.google-analytics.com/analytics.js")))
-    assertFalse(TurboShield.shouldBlock(Uri.parse("https://en.wikipedia.org/wiki/Android")))
-
-    val adGuardUri = Uri.parse("https://cdn.ezoic.net/ezoic/sa.min.js")
-    val popupUri = Uri.parse("https://srv.popads.net/pop.js")
-    assertFalse(TurboShield.shouldBlock(adGuardUri, com.example.data.AdBlockerType.OFF))
-    assertFalse(TurboShield.shouldBlock(adGuardUri, com.example.data.AdBlockerType.STANDARD))
-    assertTrue(TurboShield.shouldBlock(adGuardUri, com.example.data.AdBlockerType.ADGUARD))
-    assertFalse(TurboShield.shouldBlock(popupUri, com.example.data.AdBlockerType.ADGUARD))
-    assertTrue(TurboShield.shouldBlock(popupUri, com.example.data.AdBlockerType.STRICT))
-
-    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.OFF))
-    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STANDARD))
-    val adgScript = TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.ADGUARD)
-    assertNotNull(adgScript)
-    assertTrue(adgScript!!.contains("adsbygoogle"))
-    val strictScript = TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STRICT)
-    assertNotNull(strictScript)
-    assertTrue(strictScript!!.contains("__voltPopupGuard"))
-    assertEquals(com.example.data.AdBlockerType.ADGUARD, com.example.data.BrowserSettings().adBlockerType)
-  }
 
   @Test
   fun `media sniffer detects mp4 hls dash and audio streams and filters ts chunks`() {

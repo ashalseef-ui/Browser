@@ -19,12 +19,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -38,13 +39,13 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +57,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,13 +82,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.data.AdBlockerType
 import com.example.data.BrowserTabState
 import com.example.data.SearchEngine
 import com.example.ui.theme.LocalVoltColors
 import com.example.ui.theme.badgeAccentColor
-import androidx.compose.foundation.layout.width
-import androidx.compose.runtime.mutableFloatStateOf
 import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -97,9 +96,7 @@ fun OmniboxDock(
   previousTabTitle: String = "",
   nextTabTitle: String = "",
   searchEngine: SearchEngine,
-  adBlockerType: AdBlockerType,
   isVpnActive: Boolean,
-  sessionDataUsedBytes: Long,
   showBottomNavControls: Boolean,
   onNavigate: (String, SearchEngine?) -> Unit,
   onQueryChange: (String) -> Unit,
@@ -116,7 +113,6 @@ fun OmniboxDock(
   onOpenMediaHub: () -> Unit,
   onOpenTabs: () -> Unit,
   onOpenMenu: () -> Unit,
-  onRequestExit: () -> Unit,
   onShowToast: (String) -> Unit = {},
   onSwipeLeft: () -> Unit = {},
   onSwipeRight: () -> Unit = {},
@@ -148,18 +144,26 @@ fun OmniboxDock(
 
   val showQuickBar = isFocused || isEngineTrayOpen
 
+  val deckShape =
+    if (showBottomNavControls) RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    else RoundedCornerShape(0.dp)
+
   Surface(
     modifier = modifier.fillMaxWidth(),
-    color = MaterialTheme.colorScheme.surface,
-    tonalElevation = 6.dp,
+    shape = deckShape,
+    color = voltColors.dockSurface,
+    border =
+      if (showBottomNavControls) BorderStroke(1.dp, voltColors.cardBorder.copy(alpha = 0.7f))
+      else null,
+    shadowElevation = if (showBottomNavControls) 12.dp else 0.dp,
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-      // Sleek Interactive Gesture Handle (Phone Bottom Dock: Swipe L/R = Tab Peek, Up = Tabs, Down = Collapse)
+      // Top drag pill handle for phone bottom deck
       if (showBottomNavControls) {
         Box(
           modifier =
             Modifier.fillMaxWidth()
-              .height(16.dp)
+              .height(18.dp)
               .pointerInput(tabCount) {
                 var sumX = 0f
                 var sumY = 0f
@@ -205,18 +209,18 @@ fun OmniboxDock(
         ) {
           Box(
             modifier =
-              Modifier.width(38.dp)
-                .height(4.dp)
+              Modifier.width(36.dp)
+                .height(3.5.dp)
                 .clip(CircleShape)
                 .background(
-                  if (abs(tabSwipeDragX) >= 48f) voltColors.cyanAccent
-                  else MaterialTheme.colorScheme.outlineVariant
+                  if (abs(tabSwipeDragX) >= 48f) voltColors.brandAccent
+                  else voltColors.cardBorder
                 )
           )
         }
       }
 
-      // Live Tab-Peek Gesture Banner when swiping horizontally across bottom handle / tab pill
+      // Live Tab-Peek Gesture Banner when swiping horizontally across bottom deck / tabs counter
       AnimatedVisibility(visible = showBottomNavControls && tabCount > 1 && abs(tabSwipeDragX) > 18f) {
         val isSwipingNext = tabSwipeDragX < 0f
         val peekTitle =
@@ -224,20 +228,20 @@ fun OmniboxDock(
           else previousTabTitle.ifBlank { "Previous Tab" }
         val armed = abs(tabSwipeDragX) >= 48f
         Box(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
           contentAlignment = Alignment.Center,
         ) {
           Surface(
             shape = RoundedCornerShape(100.dp),
             color =
-              if (armed) voltColors.cyanAccent.copy(alpha = 0.2f)
-              else MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = BorderStroke(1.dp, if (armed) voltColors.cyanAccent else voltColors.cardBorder),
+              if (armed) voltColors.brandAccent.copy(alpha = 0.18f)
+              else voltColors.cardSurface,
+            border = BorderStroke(1.dp, if (armed) voltColors.brandAccent else voltColors.cardBorder),
           ) {
             Text(
               text = if (isSwipingNext) "$peekTitle  →" else "←  $peekTitle",
               style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-              color = if (armed) voltColors.cyanAccent else MaterialTheme.colorScheme.onSurface,
+              color = if (armed) voltColors.brandAccent else MaterialTheme.colorScheme.onSurface,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
@@ -246,7 +250,7 @@ fun OmniboxDock(
         }
       }
 
-      // On phone bottom dock, expand the Firefox-style engine selector right ABOVE the address bar
+      // Expandable Search Engine Selector Bar (above omnibox on phone)
       if (showBottomNavControls) {
         AnimatedVisibility(visible = showQuickBar) {
           OmniboxQuickBar(
@@ -273,109 +277,42 @@ fun OmniboxDock(
         }
       }
 
-      // Hairline loading indicator
+      // Sleek loading progress bar
       if (tab.isLoading) {
         LinearProgressIndicator(
-          progress = { (tab.progress / 100f).coerceIn(0.05f, 1f) },
+          progress = { (tab.progress / 100f).coerceIn(0.06f, 1f) },
           modifier = Modifier.fillMaxWidth().height(2.5.dp),
-          color = voltColors.cyanAccent,
-          trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+          color = voltColors.brandAccent,
+          trackColor = voltColors.cardSurface,
         )
-      } else {
-        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
       }
 
-      // Omnibox Address Pill + Security Shield & Media Hub
+      // Row 1: Unified Address & Mode Capsule + Media Studio Trigger
       Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        // Security / AdBlocker Shield Button (highlights BYP when Site Media Compatibility Bypass is active)
-        val blockerActive = adBlockerType != AdBlockerType.OFF && !tab.isMediaCompatBypassEnabled
-        val shieldTint =
-          when {
-            tab.isMediaCompatBypassEnabled -> voltColors.amberAccent
-            tab.isIncognito -> voltColors.incognitoAccent
-            !tab.isSpeedDial && !tab.isSecure -> voltColors.amberAccent
-            adBlockerType == AdBlockerType.STRICT -> voltColors.cyanAccent
-            blockerActive -> voltColors.emeraldShield
-            else -> MaterialTheme.colorScheme.onSurfaceVariant
-          }
-        val shieldLabel =
-          when {
-            tab.isMediaCompatBypassEnabled -> "BYP"
-            tab.trackersBlockedOnPage > 0 -> "${adBlockerType.badgeLabel}·${tab.trackersBlockedOnPage}"
-            else -> adBlockerType.badgeLabel
-          }
-        Box(
-          modifier =
-            Modifier.minimumInteractiveComponentSize()
-              .clip(RoundedCornerShape(100.dp))
-              .background(
-                when {
-                  tab.isMediaCompatBypassEnabled -> voltColors.amberAccent.copy(alpha = 0.16f)
-                  tab.isIncognito -> voltColors.incognitoAccent.copy(alpha = 0.16f)
-                  blockerActive -> shieldTint.copy(alpha = 0.14f)
-                  else -> MaterialTheme.colorScheme.surfaceContainerHigh
-                }
-              )
-              .border(
-                width = 1.dp,
-                color =
-                  if (blockerActive || tab.isMediaCompatBypassEnabled) shieldTint.copy(alpha = 0.45f)
-                  else MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(100.dp),
-              )
-              .clickable(onClick = onOpenSecuritySheet)
-              .padding(horizontal = 8.dp, vertical = 6.dp)
-              .testTag("security_shield_button"),
-          contentAlignment = Alignment.Center,
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-            Icon(
-              imageVector =
-                when {
-                  tab.isMediaCompatBypassEnabled -> Icons.Default.Warning
-                  tab.isSpeedDial -> Icons.Default.Shield
-                  tab.isSecure -> Icons.Default.Lock
-                  else -> Icons.Default.Warning
-                },
-              contentDescription = stringResource(R.string.cd_security_shield),
-              tint = shieldTint,
-              modifier = Modifier.size(15.dp),
-            )
-            Text(
-              text = shieldLabel,
-              style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-              color = shieldTint,
-              maxLines = 1,
-            )
-          }
-        }
-
-        // Address Input Pill with Inline Swipeable Firefox-Style Search Engine Selector
-        val omniboxShape = RoundedCornerShape(24.dp)
+        val capsuleShape = RoundedCornerShape(18.dp)
         val engineAccent = searchEngine.badgeAccentColor(voltColors.isLightTheme)
-        val omniboxBorderColor =
+        val capsuleBorderColor =
           when {
-            isFocused -> engineAccent.copy(alpha = 0.85f)
-            isEngineTrayOpen -> voltColors.cyanAccent
-            else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+            isFocused -> voltColors.brandAccent.copy(alpha = 0.85f)
+            isEngineTrayOpen -> engineAccent
+            tab.isIncognito -> voltColors.incognitoAccent.copy(alpha = 0.55f)
+            else -> voltColors.cardBorder
           }
+
         Row(
           modifier =
             Modifier.weight(1f)
               .heightIn(min = 48.dp)
-              .clip(omniboxShape)
+              .clip(capsuleShape)
               .background(voltColors.omniboxSurface)
               .border(
-                width = if (isFocused || isEngineTrayOpen) 1.3.dp else 1.dp,
-                color = omniboxBorderColor,
-                shape = omniboxShape,
+                width = if (isFocused || isEngineTrayOpen) 1.5.dp else 1.dp,
+                color = capsuleBorderColor,
+                shape = capsuleShape,
               )
               .pointerInput(Unit) {
                 var sumX = 0f
@@ -406,14 +343,48 @@ fun OmniboxDock(
                   },
                 )
               }
-              .padding(start = 4.dp, end = 4.dp),
+              .padding(horizontal = 4.dp),
           verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-          // Inline Search Engine Pill (Tap = open strip, Swipe L/R = cycle engine anytime!)
+          // Security / Session State Button (compact squircle inside capsule)
+          val shieldTint =
+            when {
+              tab.isMediaCompatBypassEnabled -> voltColors.amberAccent
+              tab.isIncognito -> voltColors.incognitoAccent
+              !tab.isSpeedDial && !tab.isSecure -> voltColors.amberAccent
+              else -> voltColors.emeraldShield
+            }
           Box(
             modifier =
               Modifier.minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(100.dp))
+                .clip(RoundedCornerShape(14.dp))
+                .background(shieldTint.copy(alpha = 0.14f))
+                .clickable(onClick = onOpenSecuritySheet)
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .testTag("security_shield_button"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector =
+                when {
+                  tab.isMediaCompatBypassEnabled -> Icons.Default.Warning
+                  tab.isIncognito -> Icons.Outlined.VisibilityOff
+                  tab.isSpeedDial -> Icons.Default.Shield
+                  tab.isSecure -> Icons.Default.Lock
+                  else -> Icons.Default.Warning
+                },
+              contentDescription = stringResource(R.string.cd_security_shield),
+              tint = shieldTint,
+              modifier = Modifier.size(16.dp),
+            )
+          }
+
+          // Search Engine Pill (Tap = open tray, Swipe = cycle engine)
+          Box(
+            modifier =
+              Modifier.minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(12.dp))
                 .pointerInput(Unit) {
                   var dragSum = 0f
                   detectHorizontalDragGestures(
@@ -443,7 +414,7 @@ fun OmniboxDock(
                     latestOnCycleEngine(1)
                   },
                 )
-                .padding(horizontal = 4.dp, vertical = 4.dp)
+                .padding(horizontal = 3.dp, vertical = 4.dp)
                 .testTag("omnibox_search_engine_button"),
             contentAlignment = Alignment.Center,
           ) {
@@ -456,27 +427,21 @@ fun OmniboxDock(
               },
               label = "omnibox_engine_badge",
             ) { targetEngine ->
-              val badgeText = targetEngine.badgeCode
               val badgeColor = targetEngine.badgeAccentColor(voltColors.isLightTheme)
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 modifier =
-                  Modifier.clip(RoundedCornerShape(100.dp))
-                    .background(badgeColor.copy(alpha = 0.16f))
-                    .border(1.dp, badgeColor.copy(alpha = 0.55f), RoundedCornerShape(100.dp))
-                    .padding(start = 6.dp, top = 4.dp, end = 3.dp, bottom = 4.dp),
+                  Modifier.clip(RoundedCornerShape(10.dp))
+                    .background(badgeColor.copy(alpha = 0.14f))
+                    .padding(start = 6.dp, top = 5.dp, end = 3.dp, bottom = 5.dp),
               ) {
-                Box(
-                  modifier = Modifier.size(6.dp).clip(CircleShape).background(badgeColor)
-                )
                 Text(
-                  text = badgeText,
+                  text = targetEngine.badgeCode,
                   style =
                     MaterialTheme.typography.labelSmall.copy(
                       fontSize = 10.sp,
                       fontWeight = FontWeight.ExtraBold,
-                      letterSpacing = (-0.2).sp,
                     ),
                   color = badgeColor,
                   maxLines = 1,
@@ -487,10 +452,7 @@ fun OmniboxDock(
                     if (isEngineTrayOpen) Icons.Default.KeyboardArrowUp
                     else Icons.Default.KeyboardArrowDown,
                   contentDescription =
-                    stringResource(
-                      R.string.cd_search_engine_selector,
-                      targetEngine.displayName,
-                    ),
+                    stringResource(R.string.cd_search_engine_selector, targetEngine.displayName),
                   tint = badgeColor,
                   modifier = Modifier.size(13.dp),
                 )
@@ -498,13 +460,14 @@ fun OmniboxDock(
             }
           }
 
+          // Input / Address display
           Box(
-            modifier = Modifier.weight(1f).padding(start = 2.dp),
+            modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
             contentAlignment = Alignment.CenterStart,
           ) {
             if (inputText.isEmpty()) {
               Text(
-                text = "Search ${searchEngine.shortLabel} or enter URL",
+                text = "Search ${searchEngine.shortLabel} or type URL",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -522,7 +485,7 @@ fun OmniboxDock(
                 MaterialTheme.typography.bodyMedium.copy(
                   color = MaterialTheme.colorScheme.onSurface
                 ),
-              cursorBrush = SolidColor(engineAccent),
+              cursorBrush = SolidColor(voltColors.brandAccent),
               keyboardOptions =
                 KeyboardOptions(
                   keyboardType = KeyboardType.Uri,
@@ -541,10 +504,8 @@ fun OmniboxDock(
                 Modifier.fillMaxWidth()
                   .onFocusChanged { state ->
                     isFocused = state.isFocused
-                    if (state.isFocused) {
-                      if (!tab.isSpeedDial && inputText.isEmpty()) {
-                        inputText = tab.url
-                      }
+                    if (state.isFocused && !tab.isSpeedDial && inputText.isEmpty()) {
+                      inputText = tab.url
                     }
                   }
                   .testTag("omnibox_input"),
@@ -575,7 +536,7 @@ fun OmniboxDock(
               Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = stringResource(R.string.cd_omnibox_go),
-                tint = engineAccent,
+                tint = voltColors.brandAccent,
                 modifier = Modifier.size(18.dp),
               )
             }
@@ -583,7 +544,7 @@ fun OmniboxDock(
             Box(
               modifier =
                 Modifier.minimumInteractiveComponentSize()
-                  .clip(CircleShape)
+                  .clip(RoundedCornerShape(12.dp))
                   .combinedClickable(
                     onClick = onReloadOrStop,
                     onLongClick = {
@@ -606,47 +567,48 @@ fun OmniboxDock(
           }
         }
 
-        // Video Sniffer / Media Hub Pill (compact)
+        // Media Studio Action Pill (right of address capsule)
         val hasSniffedMedia = tab.detectedMedia.isNotEmpty()
         Surface(
-          shape = RoundedCornerShape(100.dp),
+          shape = RoundedCornerShape(16.dp),
           color =
-            if (hasSniffedMedia) voltColors.amberAccent.copy(alpha = 0.22f)
-            else MaterialTheme.colorScheme.surfaceContainerHigh,
+            if (hasSniffedMedia) voltColors.brandAccent
+            else voltColors.cardSurface,
           border =
-            if (hasSniffedMedia) BorderStroke(1.dp, voltColors.amberAccent)
-            else null,
+            if (hasSniffedMedia) null
+            else BorderStroke(1.dp, voltColors.cardBorder),
           modifier =
             Modifier.minimumInteractiveComponentSize()
-              .clip(RoundedCornerShape(100.dp))
+              .heightIn(min = 48.dp)
+              .clip(RoundedCornerShape(16.dp))
               .clickable(onClick = onOpenMediaHub)
               .testTag("media_detected_pill"),
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = if (hasSniffedMedia) 12.dp else 13.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
             Icon(
-              imageVector = Icons.Default.PlayCircle,
+              imageVector = Icons.Default.PlayArrow,
               contentDescription = stringResource(R.string.cd_media_detected),
               tint =
-                if (hasSniffedMedia) voltColors.amberAccent
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-              modifier = Modifier.size(18.dp),
+                if (hasSniffedMedia) voltColors.onBrandAccent
+                else MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(19.dp),
             )
             if (hasSniffedMedia) {
               Text(
                 text = "${tab.detectedMedia.size}",
-                style = MaterialTheme.typography.labelMedium,
-                color = voltColors.amberAccent,
+                style = MaterialTheme.typography.labelLarge,
+                color = voltColors.onBrandAccent,
               )
             }
           }
         }
       }
 
-      // On wide-screen top dock, expand the engine selector right BELOW the address bar
+      // On wide-screen top dock, expand engine tray below address bar
       if (!showBottomNavControls) {
         AnimatedVisibility(visible = showQuickBar) {
           OmniboxQuickBar(
@@ -671,12 +633,13 @@ fun OmniboxDock(
             onCloseTray = { isEngineTrayOpen = false },
           )
         }
+        HorizontalDivider(thickness = 0.5.dp, color = voltColors.cardBorder.copy(alpha = 0.6f))
       }
 
-      // Thumb-first Bottom Control Row (8 equal-width slots: Back, Fwd, Home, Tabs, Proxy/VPN, Menu, Data Used, Exit)
+      // Row 2: Clean 6-Slot Ergonomic Action Bar (Back, Forward, Home, Tabs, Tunnel, Menu)
       if (showBottomNavControls) {
         Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp),
           horizontalArrangement = Arrangement.SpaceEvenly,
           verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -690,9 +653,10 @@ fun OmniboxDock(
               contentDescription = stringResource(R.string.cd_back),
               tint =
                 if (!tab.isSpeedDial) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
             )
           }
+
           IconButton(
             onClick = onForward,
             enabled = tab.canGoForward || (tab.isSpeedDial && tab.url.isNotBlank()),
@@ -704,15 +668,16 @@ fun OmniboxDock(
               tint =
                 if (tab.canGoForward || (tab.isSpeedDial && tab.url.isNotBlank()))
                   MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
             )
           }
-          // Home (Tap = Speed Dial Home, Long-press = Instant New Private Tab)
+
+          // Home (Tap = Start Page, Long-press = New Private Tab)
           Box(
             modifier =
               Modifier.weight(1f)
                 .minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .combinedClickable(
                   onClick = onHome,
                   onLongClick = {
@@ -727,16 +692,17 @@ fun OmniboxDock(
               imageVector = Icons.Default.Home,
               contentDescription = stringResource(R.string.cd_home),
               tint =
-                if (tab.isSpeedDial) voltColors.cyanAccent
+                if (tab.isSpeedDial) voltColors.brandAccent
                 else MaterialTheme.colorScheme.onSurface,
             )
           }
-          // Tab Counter Pill (tap opens tabs; swipe left/right switches tabs with live peek banner)
+
+          // Tabs Switcher Counter (Tap = open Tab Deck, Swipe L/R = switch tabs)
           Box(
             modifier =
               Modifier.weight(1f)
                 .minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .pointerInput(Unit) {
                   var horizontalSum = 0f
                   detectHorizontalDragGestures(
@@ -769,90 +735,66 @@ fun OmniboxDock(
           ) {
             Box(
               modifier =
-                Modifier.size(22.dp)
+                Modifier.size(23.dp)
                   .border(
                     width = 1.8.dp,
                     color =
                       if (tab.isIncognito) voltColors.incognitoAccent
                       else MaterialTheme.colorScheme.onSurface,
-                    shape = RoundedCornerShape(6.dp),
+                    shape = RoundedCornerShape(7.dp),
                   ),
               contentAlignment = Alignment.Center,
             ) {
               Text(
                 text = if (tabCount > 99) "∞" else "$tabCount",
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                 color =
                   if (tab.isIncognito) voltColors.incognitoAccent
                   else MaterialTheme.colorScheme.onSurface,
               )
             }
           }
-          // Proxy / VPN Icon positioned between Tabs and 3-dots menu
-          IconButton(
-            onClick = onOpenVpnSheet,
-            modifier = Modifier.weight(1f).testTag("omnibox_vpn_button"),
+
+          // Tunnel / VPN / Proxy Control Button with Live Status Dot
+          Box(
+            modifier =
+              Modifier.weight(1f)
+                .minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onOpenVpnSheet)
+                .testTag("omnibox_vpn_button"),
+            contentAlignment = Alignment.Center,
           ) {
-            Icon(
-              imageVector = Icons.Default.Public,
-              contentDescription = stringResource(R.string.cd_vpn_status),
-              tint =
-                if (isVpnActive) voltColors.emeraldShield
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Box {
+              Icon(
+                imageVector = Icons.Default.Public,
+                contentDescription = stringResource(R.string.cd_vpn_status),
+                tint =
+                  if (isVpnActive) voltColors.emeraldShield
+                  else MaterialTheme.colorScheme.onSurface,
+              )
+              if (isVpnActive) {
+                Box(
+                  modifier =
+                    Modifier.align(Alignment.TopEnd)
+                      .offset(x = 3.dp, y = (-2).dp)
+                      .size(8.dp)
+                      .clip(CircleShape)
+                      .background(voltColors.emeraldShield)
+                )
+              }
+            }
           }
+
+          // Command Menu (Bookmarks, Find, Desktop, Fullscreen, Share, Settings, Exit & Erase)
           IconButton(
             onClick = onOpenMenu,
             modifier = Modifier.weight(1f).testTag("nav_menu_button"),
           ) {
             Icon(
-              imageVector = Icons.Default.MoreVert,
+              imageVector = Icons.Default.Menu,
               contentDescription = stringResource(R.string.cd_menu),
               tint = MaterialTheme.colorScheme.onSurface,
-            )
-          }
-          // Numeric Data Used Counter between 3-dot Menu and Exit
-          Box(
-            modifier =
-              Modifier.weight(1f)
-                .minimumInteractiveComponentSize()
-                .clip(RoundedCornerShape(10.dp))
-                .clickable(onClick = onOpenSecuritySheet)
-                .padding(vertical = 4.dp)
-                .testTag("nav_data_usage_counter"),
-            contentAlignment = Alignment.Center,
-          ) {
-            Column(
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.Center,
-            ) {
-              Text(
-                text = formatCompactDataCounter(sessionDataUsedBytes),
-                style = MaterialTheme.typography.labelSmall,
-                color = voltColors.cyanAccent,
-                maxLines = 1,
-                softWrap = false,
-              )
-              Text(
-                text = "DATA",
-                style = MaterialTheme.typography.labelSmall.copy(
-                  fontSize = 10.sp,
-                  lineHeight = 11.sp,
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
-              )
-            }
-          }
-          IconButton(
-            onClick = onRequestExit,
-            modifier = Modifier.weight(1f).testTag("nav_exit_button"),
-          ) {
-            Icon(
-              imageVector = Icons.Default.PowerSettingsNew,
-              contentDescription = stringResource(R.string.cd_exit),
-              tint = MaterialTheme.colorScheme.error,
             )
           }
         }

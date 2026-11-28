@@ -20,7 +20,7 @@ import com.example.browser.MediaSnifferCoordinator
 import com.example.browser.TabWebCallbacks
 import com.example.browser.VoltSpeedEngine
 import com.example.browser.WebViewTabPool
-import com.example.data.AdBlockerType
+
 import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserSettings
@@ -1189,19 +1189,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     app.startActivity(chooser)
   }
 
-  fun setAdBlockerType(type: AdBlockerType) {
-    viewModelScope.launch {
-      repository.preferences.setAdBlockerType(type)
-      if (!activeTab.value.isSpeedDial) {
-        webViewPool.findWebView(activeTab.value.id)?.reload()
-      }
-      showMessage("Blocker set to ${type.displayName}")
-    }
-  }
 
-  fun toggleTurboShield(enabled: Boolean) {
-    setAdBlockerType(if (enabled) AdBlockerType.ADGUARD else AdBlockerType.OFF)
-  }
 
   fun toggleLiteMode(enabled: Boolean) {
     viewModelScope.launch { repository.preferences.setLiteMode(enabled) }

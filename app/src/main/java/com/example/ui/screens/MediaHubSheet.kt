@@ -8,7 +8,6 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -29,7 +28,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -68,8 +66,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -94,6 +90,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.data.DetectedMediaItem
 import com.example.data.DownloadItemEntity
@@ -194,8 +191,9 @@ fun MediaHubSheet(
     containerColor = MaterialTheme.colorScheme.surface,
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 440.dp, max = 690.dp).padding(bottom = 16.dp)
+      modifier = Modifier.fillMaxWidth().heightIn(min = 460.dp, max = 700.dp).padding(bottom = 16.dp)
     ) {
+      // Header
       Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -203,12 +201,12 @@ fun MediaHubSheet(
       ) {
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = "Video Sniffer & Media Hub",
+            text = "Media Studio",
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface,
           )
           Text(
-            text = "Downloadable videos > 1 MB • Media3 OkHttp & Transformer",
+            text = "Stream sniffer (> 1 MB) • Media3 Cinema & Downloads",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -245,7 +243,7 @@ fun MediaHubSheet(
           }
           Surface(
             shape = RoundedCornerShape(100.dp),
-            color = voltColors.cyanAccent.copy(alpha = 0.14f),
+            color = voltColors.brandAccent.copy(alpha = 0.14f),
             modifier =
               Modifier.minimumInteractiveComponentSize()
                 .clip(RoundedCornerShape(100.dp))
@@ -260,13 +258,13 @@ fun MediaHubSheet(
               Icon(
                 imageVector = Icons.Default.Radar,
                 contentDescription = "Scan page for videos",
-                tint = voltColors.cyanAccent,
+                tint = voltColors.brandAccent,
                 modifier = Modifier.size(15.dp),
               )
               Text(
                 text = "Scan",
                 style = MaterialTheme.typography.labelMedium,
-                color = voltColors.cyanAccent,
+                color = voltColors.brandAccent,
               )
             }
           }
@@ -275,22 +273,50 @@ fun MediaHubSheet(
 
       Spacer(modifier = Modifier.height(10.dp))
 
-      TabRow(selectedTabIndex = selectedTab, containerColor = Color.Transparent) {
-        Tab(
-          selected = selectedTab == 0,
-          onClick = { selectedTab = 0 },
-          text = { Text("Sniffer (${detectedMedia.size})") },
-        )
-        Tab(
-          selected = selectedTab == 1,
-          onClick = { selectedTab = 1 },
-          text = { Text("Downloads (${downloads.size})") },
-        )
-        Tab(
-          selected = selectedTab == 2,
-          onClick = { selectedTab = 2 },
-          text = { Text("Player / URL") },
-        )
+      // Segmented Pill Switcher
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = voltColors.cardSurface,
+        border = BorderStroke(1.dp, voltColors.cardBorder),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(4.dp),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          listOf(
+            "Sniffer (${detectedMedia.size})",
+            "Downloads (${downloads.size})",
+            "Player / URL",
+          ).forEachIndexed { idx, label ->
+            val selected = selectedTab == idx
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = if (selected) voltColors.brandAccent else Color.Transparent,
+              modifier =
+                Modifier.weight(1f)
+                  .clip(RoundedCornerShape(12.dp))
+                  .clickable { selectedTab = idx },
+            ) {
+              Box(
+                modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+                contentAlignment = Alignment.Center,
+              ) {
+                Text(
+                  text = label,
+                  style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                  ),
+                  color =
+                    if (selected) voltColors.onBrandAccent
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+            }
+          }
+        }
       }
 
       when (selectedTab) {
@@ -299,7 +325,6 @@ fun MediaHubSheet(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            // Direct Playlist / Video Resolver Bar
             item {
               Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -319,11 +344,12 @@ fun MediaHubSheet(
                     playlistInput = ""
                   },
                   enabled = playlistInput.trim().startsWith("http", ignoreCase = true),
+                  shape = RoundedCornerShape(14.dp),
                   modifier = Modifier.height(52.dp).testTag("playlist_resolve_button"),
                   colors =
                     ButtonDefaults.buttonColors(
-                      containerColor = voltColors.cyanAccent,
-                      contentColor = Color(0xFF002026),
+                      containerColor = voltColors.brandAccent,
+                      contentColor = voltColors.onBrandAccent,
                     ),
                 ) {
                   Text("Resolve")
@@ -333,9 +359,9 @@ fun MediaHubSheet(
 
             if (currentHost.isNotBlank()) {
               item {
-                val bypassTint = if (isSiteBypassEnabled) voltColors.amberAccent else voltColors.cyanAccent
+                val bypassTint = if (isSiteBypassEnabled) voltColors.amberAccent else voltColors.brandAccent
                 Surface(
-                  shape = RoundedCornerShape(14.dp),
+                  shape = RoundedCornerShape(16.dp),
                   color =
                     if (isSiteBypassEnabled) voltColors.amberAccent.copy(alpha = 0.14f)
                     else voltColors.cardSurface,
@@ -343,7 +369,7 @@ fun MediaHubSheet(
                   modifier =
                     Modifier.fillMaxWidth()
                       .minimumInteractiveComponentSize()
-                      .clip(RoundedCornerShape(14.dp))
+                      .clip(RoundedCornerShape(16.dp))
                       .clickable(onClick = onToggleSiteBypass)
                       .testTag("media_hub_site_bypass_chip"),
                 ) {
@@ -368,8 +394,8 @@ fun MediaHubSheet(
                       )
                       Text(
                         text =
-                          if (isSiteBypassEnabled) "Shields paused & protected HTML5 players enabled"
-                          else "Tap if strict site blockers stop video playback",
+                          if (isSiteBypassEnabled) "Data Saver paused & protected HTML5 players enabled"
+                          else "Tap if strict site optimization stops video playback",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                       )
@@ -393,8 +419,8 @@ fun MediaHubSheet(
             if (isScanningMedia) {
               item {
                 Surface(
-                  shape = RoundedCornerShape(12.dp),
-                  color = voltColors.cyanAccent.copy(alpha = 0.12f),
+                  shape = RoundedCornerShape(14.dp),
+                  color = voltColors.brandAccent.copy(alpha = 0.12f),
                 ) {
                   Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
@@ -404,12 +430,12 @@ fun MediaHubSheet(
                     CircularProgressIndicator(
                       modifier = Modifier.size(16.dp),
                       strokeWidth = 2.dp,
-                      color = voltColors.cyanAccent,
+                      color = voltColors.brandAccent,
                     )
                     Text(
                       text = "Resolving video links & checking sizes (> 1 MB only)...",
                       style = MaterialTheme.typography.labelMedium,
-                      color = voltColors.cyanAccent,
+                      color = voltColors.brandAccent,
                     )
                   }
                 }
@@ -453,12 +479,12 @@ fun MediaHubSheet(
                   item.kind != MediaKind.PLAYLIST && !item.url.contains("#dash_")
 
                 Surface(
-                  shape = RoundedCornerShape(16.dp),
+                  shape = RoundedCornerShape(18.dp),
                   color = voltColors.cardSurface,
-                  border = androidx.compose.foundation.BorderStroke(1.dp, voltColors.cardBorder),
+                  border = BorderStroke(1.dp, voltColors.cardBorder),
                   modifier =
                     Modifier.fillMaxWidth()
-                      .clip(RoundedCornerShape(16.dp))
+                      .clip(RoundedCornerShape(18.dp))
                       .combinedClickable(
                         onClick = { if (isPlayable) onPlayDetected(item) },
                         onLongClick = {
@@ -471,7 +497,6 @@ fun MediaHubSheet(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                   ) {
-                    // Top Row: Type icon + readable 2-line Title & clean host/file line + discreet Copy button
                     Row(
                       modifier = Modifier.fillMaxWidth(),
                       verticalAlignment = Alignment.Top,
@@ -479,10 +504,10 @@ fun MediaHubSheet(
                     ) {
                       Box(
                         modifier =
-                          Modifier.size(36.dp)
-                            .clip(RoundedCornerShape(10.dp))
+                          Modifier.size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .background(
-                              if (item.parentPlaylistUrl != null) voltColors.cyanAccent.copy(alpha = 0.16f)
+                              if (item.parentPlaylistUrl != null) voltColors.brandAccent.copy(alpha = 0.16f)
                               else voltColors.amberAccent.copy(alpha = 0.16f)
                             ),
                         contentAlignment = Alignment.Center,
@@ -496,9 +521,9 @@ fun MediaHubSheet(
                             },
                           contentDescription = null,
                           tint =
-                            if (item.parentPlaylistUrl != null) voltColors.cyanAccent
+                            if (item.parentPlaylistUrl != null) voltColors.brandAccent
                             else voltColors.amberAccent,
-                          modifier = Modifier.size(19.dp),
+                          modifier = Modifier.size(20.dp),
                         )
                       }
                       Column(
@@ -521,11 +546,11 @@ fun MediaHubSheet(
                         )
                       }
                       Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(10.dp),
+                        color = voltColors.cardElevatedSurface,
                         modifier =
                           Modifier.minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .clickable {
                               clipboard.setText(AnnotatedString(item.url))
                               onCopyUrlToast()
@@ -542,28 +567,27 @@ fun MediaHubSheet(
                       }
                     }
 
-                    // Middle Metadata Row: Clear, non-clipped chips for Format/Quality, Size, Duration/Segments
                     Row(
                       modifier = Modifier.fillMaxWidth(),
                       verticalAlignment = Alignment.CenterVertically,
                       horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                       Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = voltColors.cyanAccent.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(8.dp),
+                        color = voltColors.brandAccent.copy(alpha = 0.16f),
                       ) {
                         Text(
                           text = kindBadge.uppercase(),
                           style = MaterialTheme.typography.labelSmall,
-                          color = voltColors.cyanAccent,
+                          color = voltColors.brandAccent,
                           modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                         )
                       }
                       Surface(
-                        shape = RoundedCornerShape(6.dp),
+                        shape = RoundedCornerShape(8.dp),
                         color =
                           if (item.contentSizeBytes != null) voltColors.emeraldShield.copy(alpha = 0.14f)
-                          else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
+                          else voltColors.cardElevatedSurface,
                       ) {
                         Row(
                           modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
@@ -589,8 +613,8 @@ fun MediaHubSheet(
                       }
                       if (durationLabel != null) {
                         Surface(
-                          shape = RoundedCornerShape(6.dp),
-                          color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
+                          shape = RoundedCornerShape(8.dp),
+                          color = voltColors.cardElevatedSurface,
                         ) {
                           Text(
                             text = durationLabel,
@@ -610,7 +634,6 @@ fun MediaHubSheet(
                       }
                     }
 
-                    // Bottom Action Row: Compact Play, Download, and External Player pills
                     if (isPlayable) {
                       Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -620,8 +643,8 @@ fun MediaHubSheet(
                         CompactMediaPillButton(
                           icon = Icons.Default.PlayArrow,
                           label = "Play",
-                          containerColor = voltColors.cyanAccent,
-                          contentColor = Color(0xFF002026),
+                          containerColor = voltColors.brandAccent,
+                          contentColor = voltColors.onBrandAccent,
                           onClick = { onPlayDetected(item) },
                           modifier = Modifier.weight(1f).testTag("sniffer_play_button"),
                         )
@@ -639,7 +662,7 @@ fun MediaHubSheet(
                         CompactMediaPillButton(
                           icon = Icons.AutoMirrored.Filled.OpenInNew,
                           label = "External",
-                          containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.7f),
+                          containerColor = voltColors.cardElevatedSurface,
                           contentColor = MaterialTheme.colorScheme.onSurface,
                           onClick = { onOpenExternalDetected(item) },
                           modifier = Modifier.weight(1f).testTag("sniffer_external_button"),
@@ -685,9 +708,9 @@ fun MediaHubSheet(
                     .getOrDefault(DownloadStatus.COMPLETED)
 
                 Surface(
-                  shape = RoundedCornerShape(16.dp),
+                  shape = RoundedCornerShape(18.dp),
                   color = voltColors.cardSurface,
-                  border = androidx.compose.foundation.BorderStroke(1.dp, voltColors.cardBorder),
+                  border = BorderStroke(1.dp, voltColors.cardBorder),
                 ) {
                   Column(
                     modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -699,15 +722,15 @@ fun MediaHubSheet(
                     ) {
                       Box(
                         modifier =
-                          Modifier.size(34.dp)
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(voltColors.cyanAccent.copy(alpha = 0.14f)),
+                          Modifier.size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(voltColors.brandAccent.copy(alpha = 0.14f)),
                         contentAlignment = Alignment.Center,
                       ) {
                         Icon(
                           imageVector = iconForDownloadFile(dl.fileName, dl.mimeType),
                           contentDescription = null,
-                          tint = voltColors.cyanAccent,
+                          tint = voltColors.brandAccent,
                           modifier = Modifier.size(18.dp),
                         )
                       }
@@ -770,7 +793,7 @@ fun MediaHubSheet(
                           Icon(
                             imageVector = Icons.Default.PlayArrow,
                             contentDescription = "Play downloaded media",
-                            tint = voltColors.cyanAccent,
+                            tint = voltColors.brandAccent,
                           )
                         }
                       }
@@ -831,7 +854,7 @@ fun MediaHubSheet(
                             imageVector = Icons.Default.DriveFileMove,
                             contentDescription = null,
                             modifier = Modifier.size(15.dp),
-                            tint = voltColors.cyanAccent,
+                            tint = voltColors.brandAccent,
                           )
                           Spacer(modifier = Modifier.width(4.dp))
                           Text("Save As", style = MaterialTheme.typography.labelSmall, maxLines = 1)
@@ -872,12 +895,12 @@ fun MediaHubSheet(
                             (dl.downloadedBytes.toFloat() / dl.totalBytes.toFloat()).coerceIn(0f, 1f)
                           },
                           modifier = Modifier.fillMaxWidth().height(4.dp),
-                          color = voltColors.cyanAccent,
+                          color = voltColors.brandAccent,
                         )
                       } else {
                         LinearProgressIndicator(
                           modifier = Modifier.fillMaxWidth().height(4.dp),
-                          color = voltColors.cyanAccent,
+                          color = voltColors.brandAccent,
                         )
                       }
                     }
@@ -918,11 +941,12 @@ fun MediaHubSheet(
                     if (trimmed.startsWith("http")) onStreamDirectUrl(trimmed)
                   },
                   enabled = directUrlInput.trim().startsWith("http"),
-                  modifier = Modifier.weight(1f).height(44.dp),
+                  shape = RoundedCornerShape(14.dp),
+                  modifier = Modifier.weight(1f).height(46.dp),
                   colors =
                     ButtonDefaults.buttonColors(
-                      containerColor = voltColors.cyanAccent,
-                      contentColor = Color(0xFF002026),
+                      containerColor = voltColors.brandAccent,
+                      contentColor = voltColors.onBrandAccent,
                     ),
                 ) {
                   Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -940,7 +964,8 @@ fun MediaHubSheet(
                   enabled =
                     directUrlInput.trim().startsWith("http") ||
                       directUrlInput.trim().startsWith("data:", ignoreCase = true),
-                  modifier = Modifier.weight(1f).height(44.dp).testTag("direct_url_download_button"),
+                  shape = RoundedCornerShape(14.dp),
+                  modifier = Modifier.weight(1f).height(46.dp).testTag("direct_url_download_button"),
                 ) {
                   Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                   Spacer(modifier = Modifier.width(6.dp))
@@ -954,7 +979,8 @@ fun MediaHubSheet(
                   if (trimmed.startsWith("http")) onOpenExternalDirectUrl(trimmed)
                 },
                 enabled = directUrlInput.trim().startsWith("http"),
-                modifier = Modifier.fillMaxWidth().height(42.dp).testTag("direct_external_player_button"),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().height(44.dp).testTag("direct_external_player_button"),
               ) {
                 Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(17.dp))
                 Spacer(modifier = Modifier.width(6.dp))
@@ -976,11 +1002,12 @@ fun MediaHubSheet(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
                   )
                 },
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth().height(50.dp).testTag("pick_local_video_button"),
                 colors =
                   ButtonDefaults.buttonColors(
-                    containerColor = voltColors.cyanAccent,
-                    contentColor = Color(0xFF002026),
+                    containerColor = voltColors.brandAccent,
+                    contentColor = voltColors.onBrandAccent,
                   ),
               ) {
                 Icon(imageVector = Icons.Default.VideoLibrary, contentDescription = null)
@@ -990,6 +1017,7 @@ fun MediaHubSheet(
               Spacer(modifier = Modifier.height(8.dp))
               OutlinedButton(
                 onClick = { audioDocumentPicker.launch(arrayOf("audio/*", "video/*")) },
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth().height(50.dp).testTag("pick_local_audio_button"),
               ) {
                 Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
@@ -1013,7 +1041,7 @@ private fun DeviceStoragePermissionCard(
   Surface(
     shape = RoundedCornerShape(16.dp),
     color = voltColors.cardSurface,
-    border = androidx.compose.foundation.BorderStroke(1.dp, voltColors.cardBorder),
+    border = BorderStroke(1.dp, voltColors.cardBorder),
   ) {
     Column(
       modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -1055,6 +1083,7 @@ private fun DeviceStoragePermissionCard(
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
         OutlinedButton(
           onClick = onRequestNotifications,
+          shape = RoundedCornerShape(12.dp),
           modifier = Modifier.fillMaxWidth().testTag("allow_notifications_button"),
         ) {
           Icon(
@@ -1081,9 +1110,9 @@ private fun CompactMediaPillButton(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    shape = RoundedCornerShape(10.dp),
+    shape = RoundedCornerShape(12.dp),
     color = containerColor,
-    modifier = modifier.minimumInteractiveComponentSize().heightIn(min = 42.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
+    modifier = modifier.minimumInteractiveComponentSize().heightIn(min = 42.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick),
   ) {
     Row(
       modifier = Modifier.padding(horizontal = 8.dp),
@@ -1099,7 +1128,7 @@ private fun CompactMediaPillButton(
       Spacer(modifier = Modifier.width(4.dp))
       Text(
         text = label,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
         color = contentColor,
         maxLines = 1,
       )
@@ -1127,9 +1156,9 @@ private fun EmptyMediaState(title: String, subtitle: String) {
   ) {
     Image(
       painter = painterResource(id = R.drawable.img_media_vault_empty),
-      contentDescription = "Empty media vault illustration",
+      contentDescription = "Empty media studio illustration",
       contentScale = ContentScale.Crop,
-      modifier = Modifier.size(width = 180.dp, height = 135.dp).clip(RoundedCornerShape(18.dp)),
+      modifier = Modifier.size(width = 196.dp, height = 146.dp).clip(RoundedCornerShape(22.dp)),
     )
     Text(
       text = title,

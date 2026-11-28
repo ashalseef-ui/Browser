@@ -17,8 +17,6 @@ private val Context.voltDataStore by preferencesDataStore(name = "volt_browser_p
 class VoltPreferences(private val context: Context) {
 
   private object Keys {
-    val TURBO_SHIELD = booleanPreferencesKey("turbo_shield_enabled")
-    val AD_BLOCKER_TYPE = stringPreferencesKey("ad_blocker_type")
     val LITE_MODE = booleanPreferencesKey("lite_mode_enabled")
     val HTTPS_ONLY = booleanPreferencesKey("https_only_enabled")
     val DARK_WEB = booleanPreferencesKey("dark_web_enabled")
@@ -57,14 +55,6 @@ class VoltPreferences(private val context: Context) {
       val wgModeName = prefs[Keys.PREFERRED_WG_MODE] ?: WireGuardMode.WARP_FREE.name
       val wgMode =
         WireGuardMode.entries.firstOrNull { it.name == wgModeName } ?: WireGuardMode.WARP_FREE
-      val legacyShield = prefs[Keys.TURBO_SHIELD] ?: true
-      val blockerName = prefs[Keys.AD_BLOCKER_TYPE]
-      val blockerType =
-        if (blockerName != null) {
-          AdBlockerType.entries.firstOrNull { it.name == blockerName } ?: AdBlockerType.ADGUARD
-        } else {
-          if (legacyShield) AdBlockerType.ADGUARD else AdBlockerType.OFF
-        }
       val rawWarp = prefs[Keys.SAVED_WARP_CONF].orEmpty()
       val decryptedWarp = SecureConfigCipher.decrypt(rawWarp)
       val warpDecryptFailed = rawWarp.isNotBlank() && decryptedWarp == null
@@ -74,8 +64,6 @@ class VoltPreferences(private val context: Context) {
       val customWgDecryptFailed = rawCustomWg.isNotBlank() && decryptedCustomWg == null
 
       BrowserSettings(
-        turboShieldEnabled = blockerType != AdBlockerType.OFF,
-        adBlockerType = blockerType,
         liteModeEnabled = prefs[Keys.LITE_MODE] ?: false,
         httpsOnlyEnabled = prefs[Keys.HTTPS_ONLY] ?: false,
         darkWebEnabled = prefs[Keys.DARK_WEB] ?: true,
@@ -102,16 +90,7 @@ class VoltPreferences(private val context: Context) {
       )
     }
 
-  suspend fun setAdBlockerType(type: AdBlockerType) {
-    context.voltDataStore.edit {
-      it[Keys.AD_BLOCKER_TYPE] = type.name
-      it[Keys.TURBO_SHIELD] = type != AdBlockerType.OFF
-    }
-  }
 
-  suspend fun setTurboShield(enabled: Boolean) {
-    setAdBlockerType(if (enabled) AdBlockerType.ADGUARD else AdBlockerType.OFF)
-  }
 
   suspend fun setLiteMode(enabled: Boolean) {
     context.voltDataStore.edit { it[Keys.LITE_MODE] = enabled }

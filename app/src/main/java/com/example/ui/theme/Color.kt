@@ -6,77 +6,98 @@ import androidx.compose.ui.graphics.Color
 import com.example.data.AppThemeMode
 import com.example.data.SearchEngine
 
-// Cyber Obsidian Dark Palette
-val VoltCyan = Color(0xFF00E5FF)
-val VoltCyanDim = Color(0xFF00B8D4)
-val VoltAmber = Color(0xFFFFB300)
-val VoltEmerald = Color(0xFF00E676)
-val VoltCrimson = Color(0xFFFF5252)
-val VoltViolet = Color(0xFFB388FF)
+// Graphite Ember (Dark) Palette — Warm volcanic carbon & electric vermilion coral
+val EmberCoral = Color(0xFFFF6347)
+val EmberCoralSoft = Color(0xFFFF856D)
+val EmberOnCoral = Color(0xFF1F0602)
+val EmberMint = Color(0xFF34D399)
+val EmberAmber = Color(0xFFFBBF24)
+val EmberCobalt = Color(0xFF60A5FA)
+val EmberIris = Color(0xFFA78BFA)
+val EmberCrimson = Color(0xFFF87171)
 
-val ObsidianBg = Color(0xFF090D14)
-val ObsidianSurface = Color(0xFF111824)
-val ObsidianSurfaceHigh = Color(0xFF1A2333)
-val ObsidianSurfaceHighest = Color(0xFF232F44)
-val ObsidianBorder = Color(0xFF2B3952)
-val ObsidianTextPrimary = Color(0xFFF1F5F9)
-val ObsidianTextSecondary = Color(0xFF94A3B8)
+val GraphiteCanvas = Color(0xFF0D0D10)
+val GraphiteSurface = Color(0xFF151519)
+val GraphiteSurfaceHigh = Color(0xFF1D1D23)
+val GraphiteSurfaceHighest = Color(0xFF26262F)
+val GraphiteBorder = Color(0xFF2E2E39)
+val GraphiteTextPrimary = Color(0xFFF5F5F7)
+val GraphiteTextSecondary = Color(0xFF9C9CA8)
 
-// Zen Light Paper Palette
-val ZenPaperBg = Color(0xFFF6F8FB)
-val ZenPaperSurface = Color(0xFFFFFFFF)
-val ZenPaperSurfaceHigh = Color(0xFFEFF3F8)
-val ZenPaperSurfaceHighest = Color(0xFFE2E8F0)
-val ZenBorder = Color(0xFFD5DEE8)
-val ZenPrimary = Color(0xFF0F172A)
-val ZenSecondary = Color(0xFF475569)
+// Alabaster Paper (Light) Palette — Warm ceramic stone & deep vermilion
+val AlabasterCanvas = Color(0xFFF6F4EF)
+val AlabasterSurface = Color(0xFFFFFFFF)
+val AlabasterSurfaceHigh = Color(0xFFEDE9E0)
+val AlabasterSurfaceHighest = Color(0xFFE3DDD1)
+val AlabasterBorder = Color(0xFFDAD3C5)
+val AlabasterTextPrimary = Color(0xFF161619)
+val AlabasterTextSecondary = Color(0xFF5D5C66)
+
+val AlabasterCoral = Color(0xFFDC3D1E)
+val AlabasterMint = Color(0xFF059669)
+val AlabasterAmber = Color(0xFFD97706)
+val AlabasterCobalt = Color(0xFF2563EB)
+val AlabasterIris = Color(0xFF7C3AED)
+val AlabasterCrimson = Color(0xFFDC2626)
 
 @Immutable
 data class VoltExtendedColors(
   val themeMode: AppThemeMode,
   val isLightTheme: Boolean,
-  val cyanAccent: Color,
+  val brandAccent: Color,
+  val onBrandAccent: Color,
+  val infoAccent: Color,
   val amberAccent: Color,
   val emeraldShield: Color,
   val incognitoAccent: Color,
   val cardSurface: Color,
+  val cardElevatedSurface: Color,
   val cardBorder: Color,
   val omniboxSurface: Color,
+  val dockSurface: Color,
   val pillSurface: Color,
   val pillBorder: Color,
 )
 
-val DarkVoltExtendedColors =
+val GraphiteExtendedColors =
   VoltExtendedColors(
     themeMode = AppThemeMode.CYBER_OBSIDIAN,
     isLightTheme = false,
-    cyanAccent = VoltCyan,
-    amberAccent = VoltAmber,
-    emeraldShield = VoltEmerald,
-    incognitoAccent = VoltViolet,
-    cardSurface = ObsidianSurfaceHigh,
-    cardBorder = ObsidianBorder,
-    omniboxSurface = ObsidianSurfaceHighest,
-    pillSurface = Color(0xAA111824),
+    brandAccent = EmberCoral,
+    onBrandAccent = EmberOnCoral,
+    infoAccent = EmberCobalt,
+    amberAccent = EmberAmber,
+    emeraldShield = EmberMint,
+    incognitoAccent = EmberIris,
+    cardSurface = GraphiteSurfaceHigh,
+    cardElevatedSurface = GraphiteSurfaceHighest,
+    cardBorder = GraphiteBorder,
+    omniboxSurface = GraphiteSurfaceHighest,
+    dockSurface = Color(0xFF131318),
+    pillSurface = Color(0xCC1B1B22),
     pillBorder = Color(0x22FFFFFF),
   )
 
-val ZenLightExtendedColors =
+val AlabasterExtendedColors =
   VoltExtendedColors(
     themeMode = AppThemeMode.ZEN_LIGHT,
     isLightTheme = true,
-    cyanAccent = Color(0xFF0284C7),
-    amberAccent = Color(0xFFD97706),
-    emeraldShield = Color(0xFF059669),
-    incognitoAccent = Color(0xFF7C3AED),
-    cardSurface = ZenPaperSurface,
-    cardBorder = ZenBorder,
-    omniboxSurface = ZenPaperSurfaceHigh,
-    pillSurface = Color(0xFFF1F5F9),
-    pillBorder = ZenBorder,
+    brandAccent = AlabasterCoral,
+    onBrandAccent = Color.White,
+    infoAccent = AlabasterCobalt,
+    amberAccent = AlabasterAmber,
+    emeraldShield = AlabasterMint,
+    incognitoAccent = AlabasterIris,
+    cardSurface = AlabasterSurface,
+    cardElevatedSurface = AlabasterSurfaceHigh,
+    cardBorder = AlabasterBorder,
+    omniboxSurface = AlabasterSurfaceHigh,
+    dockSurface = AlabasterSurface,
+    pillSurface = Color(0xFFF0EDE5),
+    pillBorder = AlabasterBorder,
   )
 
-val LocalVoltColors = staticCompositionLocalOf { DarkVoltExtendedColors }
+val LocalVoltColors = staticCompositionLocalOf { GraphiteExtendedColors }
 
 fun SearchEngine.badgeAccentColor(isLightTheme: Boolean): Color =
   when {

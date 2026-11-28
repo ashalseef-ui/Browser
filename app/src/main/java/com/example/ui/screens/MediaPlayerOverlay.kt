@@ -5,6 +5,7 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -58,6 +59,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -142,8 +144,8 @@ fun MediaPlayerOverlay(
               Brush.radialGradient(
                 colors =
                   listOf(
-                    voltColors.cyanAccent.copy(alpha = 0.22f),
-                    Color(0xFF090D14),
+                    voltColors.brandAccent.copy(alpha = 0.24f),
+                    Color(0xFF0D0D10),
                   )
               )
             ),
@@ -154,15 +156,16 @@ fun MediaPlayerOverlay(
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
           Surface(
-            shape = CircleShape,
-            color = voltColors.cyanAccent.copy(alpha = 0.16f),
-            modifier = Modifier.size(112.dp),
+            shape = RoundedCornerShape(32.dp),
+            color = voltColors.brandAccent.copy(alpha = 0.16f),
+            border = BorderStroke(1.dp, voltColors.brandAccent.copy(alpha = 0.35f)),
+            modifier = Modifier.size(116.dp),
           ) {
             Box(contentAlignment = Alignment.Center) {
               Icon(
                 imageVector = Icons.Default.GraphicEq,
                 contentDescription = null,
-                tint = voltColors.cyanAccent,
+                tint = voltColors.brandAccent,
                 modifier = Modifier.size(56.dp),
               )
             }
@@ -181,16 +184,16 @@ fun MediaPlayerOverlay(
 
     if (state.isBuffering && !isInPipMode) {
       CircularProgressIndicator(
-        color = voltColors.cyanAccent,
+        color = voltColors.brandAccent,
         modifier = Modifier.align(Alignment.Center),
       )
     }
 
-    // Lock-only floating unlock pill when controls are locked
     if (isControlsLocked && showControls && !isInPipMode) {
       Surface(
         shape = CircleShape,
-        color = Color(0xAA090D14),
+        color = Color(0xCC121216),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
         modifier =
           Modifier.align(Alignment.BottomStart)
             .padding(20.dp)
@@ -203,7 +206,12 @@ fun MediaPlayerOverlay(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          Icon(Icons.Default.Lock, contentDescription = "Unlock player", tint = voltColors.amberAccent, modifier = Modifier.size(18.dp))
+          Icon(
+            Icons.Default.Lock,
+            contentDescription = "Unlock player",
+            tint = voltColors.amberAccent,
+            modifier = Modifier.size(18.dp),
+          )
           Text("Tap to Unlock", style = MaterialTheme.typography.labelMedium, color = Color.White)
         }
       }
@@ -218,7 +226,7 @@ fun MediaPlayerOverlay(
       Box(
         modifier =
           Modifier.fillMaxSize()
-            .background(Color(0x77000000))
+            .background(Color(0x88000000))
             .padding(horizontal = 18.dp, vertical = 18.dp)
       ) {
         // Top HUD Bar
@@ -253,7 +261,7 @@ fun MediaPlayerOverlay(
               Text(
                 text = state.activeMedia?.sourcePageUrl.orEmpty(),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFFCBD5E1),
+                color = Color(0xFFD1D1DA),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -280,7 +288,7 @@ fun MediaPlayerOverlay(
               Icon(
                 imageVector = if (state.isLooping) Icons.Default.RepeatOne else Icons.Default.Repeat,
                 contentDescription = "Toggle loop",
-                tint = if (state.isLooping) voltColors.cyanAccent else Color.White,
+                tint = if (state.isLooping) voltColors.brandAccent else Color.White,
               )
             }
             IconButton(
@@ -313,7 +321,7 @@ fun MediaPlayerOverlay(
                 Icon(
                   imageVector = Icons.Default.PictureInPictureAlt,
                   contentDescription = stringResource(R.string.cd_pip),
-                  tint = voltColors.cyanAccent,
+                  tint = voltColors.brandAccent,
                 )
               }
             }
@@ -350,9 +358,9 @@ fun MediaPlayerOverlay(
 
           Surface(
             shape = CircleShape,
-            color = voltColors.cyanAccent,
+            color = voltColors.brandAccent,
             modifier =
-              Modifier.size(68.dp)
+              Modifier.size(70.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onTogglePlayPause)
                 .testTag("player_play_pause_button"),
@@ -361,7 +369,7 @@ fun MediaPlayerOverlay(
               Icon(
                 imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = stringResource(R.string.cd_play_pause),
-                tint = Color(0xFF002026),
+                tint = Color.White,
                 modifier = Modifier.size(38.dp),
               )
             }
@@ -387,8 +395,8 @@ fun MediaPlayerOverlay(
         ) {
           state.errorMessage?.let { error ->
             Surface(
-              shape = RoundedCornerShape(12.dp),
-              color = MaterialTheme.colorScheme.error.copy(alpha = 0.88f),
+              shape = RoundedCornerShape(14.dp),
+              color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
             ) {
               Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -425,8 +433,8 @@ fun MediaPlayerOverlay(
             valueRange = 0f..duration.toFloat(),
             colors =
               SliderDefaults.colors(
-                thumbColor = voltColors.cyanAccent,
-                activeTrackColor = voltColors.cyanAccent,
+                thumbColor = voltColors.brandAccent,
+                activeTrackColor = voltColors.brandAccent,
                 inactiveTrackColor = Color.White.copy(alpha = 0.28f),
               ),
           )
@@ -461,20 +469,20 @@ fun MediaPlayerOverlay(
               speedOptions.forEach { spd ->
                 val selected = state.playbackSpeed == spd
                 Surface(
-                  shape = RoundedCornerShape(8.dp),
+                  shape = RoundedCornerShape(10.dp),
                   color =
-                    if (selected) voltColors.cyanAccent
+                    if (selected) voltColors.brandAccent
                     else Color.White.copy(alpha = 0.14f),
                   modifier =
                     Modifier.minimumInteractiveComponentSize()
-                      .clip(RoundedCornerShape(8.dp))
+                      .clip(RoundedCornerShape(10.dp))
                       .clickable { onSelectSpeed(spd) },
                 ) {
                   Text(
                     text = "${spd}x",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) Color(0xFF002026) else Color.White,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                   )
                 }
               }
@@ -515,12 +523,12 @@ fun MiniMediaPlayerBar(
       modifier
         .fillMaxWidth()
         .padding(horizontal = 12.dp, vertical = 4.dp)
-        .clip(RoundedCornerShape(16.dp))
+        .clip(RoundedCornerShape(18.dp))
         .clickable(onClick = onExpand)
         .testTag("mini_media_player_bar"),
-    shape = RoundedCornerShape(16.dp),
+    shape = RoundedCornerShape(18.dp),
     color = voltColors.cardSurface,
-    border = androidx.compose.foundation.BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.45f)),
+    border = BorderStroke(1.dp, voltColors.brandAccent.copy(alpha = 0.45f)),
     tonalElevation = 8.dp,
   ) {
     Row(
@@ -530,15 +538,15 @@ fun MiniMediaPlayerBar(
     ) {
       Box(
         modifier =
-          Modifier.size(36.dp)
-            .clip(CircleShape)
-            .background(voltColors.cyanAccent.copy(alpha = 0.18f)),
+          Modifier.size(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(voltColors.brandAccent.copy(alpha = 0.16f)),
         contentAlignment = Alignment.Center,
       ) {
         Icon(
           imageVector = Icons.Default.GraphicEq,
           contentDescription = null,
-          tint = voltColors.cyanAccent,
+          tint = voltColors.brandAccent,
           modifier = Modifier.size(20.dp),
         )
       }
@@ -566,7 +574,7 @@ fun MiniMediaPlayerBar(
         Icon(
           imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
           contentDescription = stringResource(R.string.cd_play_pause),
-          tint = voltColors.cyanAccent,
+          tint = voltColors.brandAccent,
         )
       }
 

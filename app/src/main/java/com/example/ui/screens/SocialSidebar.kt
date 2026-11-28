@@ -21,14 +21,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -93,7 +91,6 @@ fun SocialSidebarOverlay(
   val voltColors = LocalVoltColors.current
   val density = LocalDensity.current
 
-  // Movable state: user can drag vertically & dock to Left or Right edge
   var isDockedRight by remember { mutableStateOf(false) }
   var verticalFraction by remember { mutableFloatStateOf(0.42f) }
   var isDragging by remember { mutableStateOf(false) }
@@ -123,7 +120,6 @@ fun SocialSidebarOverlay(
 
     val animatedOffset by animateIntOffsetAsState(targetValue = targetOffset, label = "social_handle_offset")
 
-    // Movable Floating Handle Tab when sidebar is closed
     if (!isOpen) {
       val handleShape =
         if (isDockedRight) RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
@@ -131,8 +127,8 @@ fun SocialSidebarOverlay(
 
       Surface(
         shape = handleShape,
-        color = voltColors.cardSurface.copy(alpha = 0.95f),
-        border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.50f)),
+        color = voltColors.cardSurface.copy(alpha = 0.96f),
+        border = BorderStroke(1.dp, voltColors.brandAccent.copy(alpha = 0.45f)),
         shadowElevation = 6.dp,
         modifier =
           Modifier.offset { animatedOffset }
@@ -160,9 +156,7 @@ fun SocialSidebarOverlay(
                   verticalFraction = (dragOffsetY / maxY.coerceAtLeast(1f)).coerceIn(0.05f, 0.95f)
                   isDragging = false
                 },
-                onDragCancel = {
-                  isDragging = false
-                },
+                onDragCancel = { isDragging = false },
               )
             }
             .clickable(onClick = onToggleSidebar)
@@ -182,7 +176,7 @@ fun SocialSidebarOverlay(
           Icon(
             imageVector = Icons.Default.Forum,
             contentDescription = "Open social media sidebar",
-            tint = voltColors.cyanAccent,
+            tint = voltColors.brandAccent,
             modifier = Modifier.size(16.dp),
           )
           Icon(
@@ -197,7 +191,6 @@ fun SocialSidebarOverlay(
       }
     }
 
-    // Dim backdrop when sidebar is open
     AnimatedVisibility(
       visible = isOpen,
       enter = fadeIn(),
@@ -206,7 +199,7 @@ fun SocialSidebarOverlay(
       Box(
         modifier =
           Modifier.fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.44f))
+            .background(Color.Black.copy(alpha = 0.48f))
             .clickable(
               interactionSource = remember { MutableInteractionSource() },
               indication = null,
@@ -215,11 +208,10 @@ fun SocialSidebarOverlay(
       )
     }
 
-    // Slide-in Movable Social Sidebar Panel (Docks Left OR Right matching handle)
     val drawerAlignment = if (isDockedRight) Alignment.CenterEnd else Alignment.CenterStart
     val drawerShape =
-      if (isDockedRight) RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp)
-      else RoundedCornerShape(topEnd = 22.dp, bottomEnd = 22.dp)
+      if (isDockedRight) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)
+      else RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
 
     AnimatedVisibility(
       visible = isOpen,
@@ -231,8 +223,8 @@ fun SocialSidebarOverlay(
         shape = drawerShape,
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, voltColors.cardBorder),
-        shadowElevation = 10.dp,
-        modifier = Modifier.width(260.dp).fillMaxHeight().testTag("social_sidebar_panel"),
+        shadowElevation = 12.dp,
+        modifier = Modifier.width(268.dp).fillMaxHeight().testTag("social_sidebar_panel"),
       ) {
         Column(
           modifier =
@@ -241,7 +233,6 @@ fun SocialSidebarOverlay(
               .padding(horizontal = 14.dp, vertical = 14.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-          // Header with Dock-Side Swap & Close
           Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -254,26 +245,26 @@ fun SocialSidebarOverlay(
             ) {
               Box(
                 modifier =
-                  Modifier.size(32.dp)
-                    .clip(CircleShape)
-                    .background(voltColors.cyanAccent.copy(alpha = 0.16f)),
+                  Modifier.size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(voltColors.brandAccent.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = Icons.Default.Forum,
                   contentDescription = null,
-                  tint = voltColors.cyanAccent,
-                  modifier = Modifier.size(17.dp),
+                  tint = voltColors.brandAccent,
+                  modifier = Modifier.size(18.dp),
                 )
               }
               Column {
                 Text(
-                  text = "Social Apps",
+                  text = "Social Hub",
                   style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                   color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                  text = if (isDockedRight) "Docked Right • Drag tab" else "Docked Left • Drag tab",
+                  text = if (isDockedRight) "Right Edge • Drag handle" else "Left Edge • Drag handle",
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -287,7 +278,7 @@ fun SocialSidebarOverlay(
                 Icon(
                   imageVector = Icons.Default.SwapHoriz,
                   contentDescription = "Move sidebar to opposite side",
-                  tint = voltColors.cyanAccent,
+                  tint = voltColors.brandAccent,
                   modifier = Modifier.size(19.dp),
                 )
               }
@@ -305,9 +296,8 @@ fun SocialSidebarOverlay(
             }
           }
 
-          HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+          HorizontalDivider(color = voltColors.cardBorder)
 
-          // Social App Cards (Instagram, Facebook)
           socialApps.forEach { app ->
             val isInstagram = app.id == "instagram"
             val accentBrush =
@@ -319,7 +309,7 @@ fun SocialSidebarOverlay(
             val accentColor = if (isInstagram) Color(0xFFDD2A7B) else Color(0xFF1877F2)
 
             Surface(
-              shape = RoundedCornerShape(16.dp),
+              shape = RoundedCornerShape(18.dp),
               color = voltColors.cardSurface,
               border = BorderStroke(1.dp, voltColors.cardBorder),
               modifier = Modifier.fillMaxWidth().testTag("social_card_${app.id}"),
@@ -363,6 +353,7 @@ fun SocialSidebarOverlay(
 
                 Button(
                   onClick = { onOpenInBrowser(app) },
+                  shape = RoundedCornerShape(12.dp),
                   modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_open_${app.id}_button"),
                   contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                   colors =
@@ -377,6 +368,7 @@ fun SocialSidebarOverlay(
                 if (app.isInstalled) {
                   OutlinedButton(
                     onClick = { onLaunchInstalledApp(app) },
+                    shape = RoundedCornerShape(12.dp),
                     modifier =
                       Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_app_${app.id}_button"),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
@@ -394,11 +386,10 @@ fun SocialSidebarOverlay(
             }
           }
 
-          // Device Login / Password Manager Autofill Box
           Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(18.dp),
             color = voltColors.cardSurface,
-            border = BorderStroke(1.dp, voltColors.cyanAccent.copy(alpha = 0.38f)),
+            border = BorderStroke(1.dp, voltColors.brandAccent.copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth().testTag("social_autofill_card"),
           ) {
             Column(
@@ -412,7 +403,7 @@ fun SocialSidebarOverlay(
                 Icon(
                   imageVector = Icons.Default.Key,
                   contentDescription = null,
-                  tint = voltColors.cyanAccent,
+                  tint = voltColors.brandAccent,
                   modifier = Modifier.size(18.dp),
                 )
                 Column(modifier = Modifier.weight(1f)) {
@@ -442,11 +433,12 @@ fun SocialSidebarOverlay(
 
               Button(
                 onClick = onTriggerAutofill,
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_autofill_button"),
                 colors =
                   ButtonDefaults.buttonColors(
-                    containerColor = voltColors.cyanAccent,
-                    contentColor = Color(0xFF002026),
+                    containerColor = voltColors.brandAccent,
+                    contentColor = voltColors.onBrandAccent,
                   ),
               ) {
                 Icon(
@@ -460,6 +452,7 @@ fun SocialSidebarOverlay(
 
               OutlinedButton(
                 onClick = onOpenAutofillSettings,
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("social_autofill_settings_button"),
               ) {
                 Icon(

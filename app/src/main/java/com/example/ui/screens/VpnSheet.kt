@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -74,6 +73,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.BrowserSettings
@@ -212,25 +212,22 @@ fun FreePublicVpnSheet(
     containerColor = MaterialTheme.colorScheme.surface,
   ) {
     LazyColumn(
-      modifier = Modifier.fillMaxWidth().heightIn(max = 700.dp),
+      modifier = Modifier.fillMaxWidth().heightIn(max = 710.dp),
       contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      // Top Status Summary Box
+      // Top Live Exit Status Banner
       item {
+        val bannerTint =
+          if (state.isAnyProtectionActive) voltColors.emeraldShield else voltColors.brandAccent
         Surface(
-          shape = RoundedCornerShape(18.dp),
-          color = voltColors.cardSurface,
-          border =
-            BorderStroke(
-              1.dp,
-              if (state.isAnyProtectionActive) voltColors.emeraldShield.copy(alpha = 0.6f)
-              else voltColors.cardBorder,
-            ),
+          shape = RoundedCornerShape(20.dp),
+          color = bannerTint.copy(alpha = 0.10f),
+          border = BorderStroke(1.dp, bannerTint.copy(alpha = 0.4f)),
         ) {
           Column(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             Row(
               modifier = Modifier.fillMaxWidth(),
@@ -239,26 +236,21 @@ fun FreePublicVpnSheet(
             ) {
               Box(
                 modifier =
-                  Modifier.size(38.dp)
-                    .clip(CircleShape)
-                    .background(
-                      if (state.isAnyProtectionActive) voltColors.emeraldShield.copy(alpha = 0.18f)
-                      else voltColors.cyanAccent.copy(alpha = 0.14f)
-                    ),
+                  Modifier.size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(bannerTint.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = if (state.isWireGuardActive) Icons.Default.Shield else Icons.Default.Public,
                   contentDescription = null,
-                  tint =
-                    if (state.isAnyProtectionActive) voltColors.emeraldShield
-                    else voltColors.cyanAccent,
+                  tint = bannerTint,
                 )
               }
               Column(modifier = Modifier.weight(1f)) {
                 Text(
-                  text = "VPN, Proxy & DNS Control",
-                  style = MaterialTheme.typography.titleMedium,
+                  text = "Network & Tunnel",
+                  style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                   color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
@@ -277,8 +269,8 @@ fun FreePublicVpnSheet(
               Surface(
                 shape = RoundedCornerShape(100.dp),
                 color =
-                  if (state.isAnyProtectionActive) voltColors.emeraldShield.copy(alpha = 0.16f)
-                  else MaterialTheme.colorScheme.surfaceContainerHigh,
+                  if (state.isAnyProtectionActive) voltColors.emeraldShield.copy(alpha = 0.18f)
+                  else voltColors.cardSurface,
               ) {
                 Text(
                   text =
@@ -287,9 +279,9 @@ fun FreePublicVpnSheet(
                       state.isWireGuardActive -> "WG ON"
                       state.isAutoProxyActive -> "PROXY ON"
                       state.isDnsVpnActive -> "DoH ON"
-                      else -> "ALL OFF"
+                      else -> "DIRECT"
                     },
-                  style = MaterialTheme.typography.labelSmall,
+                  style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                   color =
                     if (state.isAnyProtectionActive) voltColors.emeraldShield
                     else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -308,10 +300,10 @@ fun FreePublicVpnSheet(
         }
       }
 
-      // BLOCK 1: WireGuard VPN Box (WARP + Custom .conf) with On/Off Toggle
+      // MODULE 1: WireGuard VPN
       item {
         Surface(
-          shape = RoundedCornerShape(18.dp),
+          shape = RoundedCornerShape(20.dp),
           color = voltColors.cardSurface,
           border =
             BorderStroke(
@@ -331,19 +323,19 @@ fun FreePublicVpnSheet(
             ) {
               Box(
                 modifier =
-                  Modifier.size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                  Modifier.size(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(
                       if (state.isWireGuardActive) voltColors.emeraldShield.copy(alpha = 0.18f)
-                      else voltColors.cyanAccent.copy(alpha = 0.14f)
+                      else voltColors.brandAccent.copy(alpha = 0.14f)
                     ),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = Icons.Default.Shield,
                   contentDescription = null,
-                  tint = if (state.isWireGuardActive) voltColors.emeraldShield else voltColors.cyanAccent,
-                  modifier = Modifier.size(19.dp),
+                  tint = if (state.isWireGuardActive) voltColors.emeraldShield else voltColors.brandAccent,
+                  modifier = Modifier.size(20.dp),
                 )
               }
               Column(
@@ -414,11 +406,11 @@ fun FreePublicVpnSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
               ) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = voltColors.cardBorder.copy(alpha = 0.7f))
 
                 if (state.warpConfigDecryptFailed || state.customWgConfigDecryptFailed) {
                   Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = voltColors.amberAccent.copy(alpha = 0.14f),
                     border = BorderStroke(1.dp, voltColors.amberAccent.copy(alpha = 0.55f)),
                   ) {
@@ -445,7 +437,7 @@ fun FreePublicVpnSheet(
 
                 if (state.isKillSwitchTripped) {
                   Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
                   ) {
@@ -480,11 +472,12 @@ fun FreePublicVpnSheet(
                   Button(
                     onClick = onConnectWarp,
                     enabled = !state.isWireGuardConnecting,
-                    modifier = Modifier.weight(1f).height(44.dp).testTag("connect_warp_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f).height(46.dp).testTag("connect_warp_button"),
                     colors =
                       ButtonDefaults.buttonColors(
-                        containerColor = voltColors.cyanAccent,
-                        contentColor = Color(0xFF002026),
+                        containerColor = voltColors.brandAccent,
+                        contentColor = voltColors.onBrandAccent,
                       ),
                     contentPadding = PaddingValues(horizontal = 10.dp),
                   ) {
@@ -492,7 +485,7 @@ fun FreePublicVpnSheet(
                       CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp,
-                        color = Color(0xFF002026),
+                        color = voltColors.onBrandAccent,
                       )
                     } else {
                       Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -510,7 +503,8 @@ fun FreePublicVpnSheet(
 
                   OutlinedButton(
                     onClick = { showCustomWgEditor = !showCustomWgEditor },
-                    modifier = Modifier.weight(1f).height(44.dp).testTag("toggle_custom_wg_editor_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f).height(46.dp).testTag("toggle_custom_wg_editor_button"),
                     contentPadding = PaddingValues(horizontal = 10.dp),
                   ) {
                     Icon(imageVector = Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(15.dp))
@@ -523,7 +517,8 @@ fun FreePublicVpnSheet(
                   OutlinedButton(
                     onClick = onConnectSavedCustomWg,
                     enabled = !state.isWireGuardConnecting,
-                    modifier = Modifier.fillMaxWidth().height(42.dp).testTag("connect_saved_custom_wg_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().height(44.dp).testTag("connect_saved_custom_wg_button"),
                   ) {
                     Text("Connect Saved: ${settings.savedCustomWgName.ifBlank { "Custom WireGuard" }}")
                   }
@@ -548,6 +543,7 @@ fun FreePublicVpnSheet(
                       )
                       OutlinedButton(
                         onClick = { confFilePickerLauncher.launch(arrayOf("*/*")) },
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.height(52.dp).testTag("import_wg_conf_file_button"),
                       ) {
                         Icon(imageVector = Icons.Default.FileOpen, contentDescription = null)
@@ -571,7 +567,8 @@ fun FreePublicVpnSheet(
                       enabled =
                         WireGuardManager.hasValidWireGuardSections(customWgConfText) &&
                           !state.isWireGuardConnecting,
-                      modifier = Modifier.fillMaxWidth().height(44.dp).testTag("connect_custom_wg_button"),
+                      shape = RoundedCornerShape(14.dp),
+                      modifier = Modifier.fillMaxWidth().height(46.dp).testTag("connect_custom_wg_button"),
                     ) {
                       Text("Connect Custom WireGuard")
                     }
@@ -633,6 +630,7 @@ fun FreePublicVpnSheet(
                         )
                       }
                     },
+                    shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     modifier = Modifier.testTag("open_android_vpn_settings_button"),
                   ) {
@@ -645,10 +643,10 @@ fun FreePublicVpnSheet(
         }
       }
 
-      // BLOCK 2: HTTP / SOCKS5 Proxy Box (DE & IN Preferred + Private Auth) with On/Off Toggle
+      // MODULE 2: HTTP / SOCKS5 Web Proxy
       item {
         Surface(
-          shape = RoundedCornerShape(18.dp),
+          shape = RoundedCornerShape(20.dp),
           color = voltColors.cardSurface,
           border =
             BorderStroke(
@@ -668,19 +666,19 @@ fun FreePublicVpnSheet(
             ) {
               Box(
                 modifier =
-                  Modifier.size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                  Modifier.size(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(
                       if (state.isAutoProxyActive) voltColors.emeraldShield.copy(alpha = 0.18f)
-                      else voltColors.cyanAccent.copy(alpha = 0.14f)
+                      else voltColors.brandAccent.copy(alpha = 0.14f)
                     ),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = Icons.Default.Public,
                   contentDescription = null,
-                  tint = if (state.isAutoProxyActive) voltColors.emeraldShield else voltColors.cyanAccent,
-                  modifier = Modifier.size(19.dp),
+                  tint = if (state.isAutoProxyActive) voltColors.emeraldShield else voltColors.brandAccent,
+                  modifier = Modifier.size(20.dp),
                 )
               }
               Column(
@@ -700,7 +698,7 @@ fun FreePublicVpnSheet(
                       state.isFetchingRelays || state.isConnectingRelay -> "Scanning DE/IN & global proxies..."
                       state.activeRelay != null ->
                         "${state.activeRelay.country} • ${state.activeRelay.ip}:${state.activeRelay.port} (${state.activeRelay.protocol})"
-                      else -> "9 public feeds + Private Auth (user:pass@ip:port)"
+                      else -> "Public feeds + Private Auth (user:pass@ip:port)"
                     },
                   style = MaterialTheme.typography.labelSmall,
                   color =
@@ -742,7 +740,7 @@ fun FreePublicVpnSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
               ) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = voltColors.cardBorder.copy(alpha = 0.7f))
 
                 Row(
                   modifier = Modifier.fillMaxWidth(),
@@ -755,18 +753,19 @@ fun FreePublicVpnSheet(
                       }
                     },
                     enabled = !state.isFetchingRelays && !state.isConnectingRelay,
-                    modifier = Modifier.weight(1f).height(44.dp).testTag("auto_connect_relay_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f).height(46.dp).testTag("auto_connect_relay_button"),
                     colors =
                       ButtonDefaults.buttonColors(
-                        containerColor = voltColors.cyanAccent,
-                        contentColor = Color(0xFF002026),
+                        containerColor = voltColors.brandAccent,
+                        contentColor = voltColors.onBrandAccent,
                       ),
                   ) {
                     if (state.isFetchingRelays || state.isConnectingRelay) {
                       CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp,
-                        color = Color(0xFF002026),
+                        color = voltColors.onBrandAccent,
                       )
                     } else {
                       Icon(
@@ -783,7 +782,8 @@ fun FreePublicVpnSheet(
                   }
                   OutlinedButton(
                     onClick = { showCustomProxyInput = !showCustomProxyInput },
-                    modifier = Modifier.height(44.dp).testTag("toggle_custom_proxy_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(46.dp).testTag("toggle_custom_proxy_button"),
                     contentPadding = PaddingValues(horizontal = 10.dp),
                   ) {
                     Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -798,7 +798,7 @@ fun FreePublicVpnSheet(
                     Icon(
                       imageVector = Icons.Default.Refresh,
                       contentDescription = "Refresh free proxies",
-                      tint = voltColors.cyanAccent,
+                      tint = voltColors.brandAccent,
                     )
                   }
                 }
@@ -821,7 +821,7 @@ fun FreePublicVpnSheet(
                         FilterChipPill(
                           label = proto,
                           selected = customProxyProtocol == proto,
-                          accentColor = voltColors.cyanAccent,
+                          accentColor = voltColors.brandAccent,
                           onClick = { customProxyProtocol = proto },
                         )
                       }
@@ -832,6 +832,7 @@ fun FreePublicVpnSheet(
                           showCustomProxyInput = false
                         },
                         enabled = customProxyText.contains(':'),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.height(44.dp).testTag("connect_custom_proxy_button"),
                       ) {
                         Text("Connect")
@@ -840,7 +841,6 @@ fun FreePublicVpnSheet(
                   }
                 }
 
-                // Protocol & Country Filters
                 Row(
                   modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -849,7 +849,7 @@ fun FreePublicVpnSheet(
                     FilterChipPill(
                       label = filter.label,
                       selected = state.selectedProtocolFilter == filter,
-                      accentColor = voltColors.cyanAccent,
+                      accentColor = voltColors.brandAccent,
                       onClick = { onSelectProtocolFilter(filter) },
                     )
                   }
@@ -884,7 +884,7 @@ fun FreePublicVpnSheet(
                     Icon(
                       imageVector = Icons.Default.Autorenew,
                       contentDescription = null,
-                      tint = voltColors.cyanAccent,
+                      tint = voltColors.brandAccent,
                       modifier = Modifier.size(16.dp),
                     )
                     Text(
@@ -926,7 +926,7 @@ fun FreePublicVpnSheet(
         items(filteredRelays, key = { it.id }) { relay ->
           val isConnected = state.activeRelay?.id == relay.id
           Surface(
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(16.dp),
             color =
               if (isConnected) voltColors.emeraldShield.copy(alpha = 0.14f)
               else voltColors.cardSurface,
@@ -937,7 +937,7 @@ fun FreePublicVpnSheet(
               ),
             modifier =
               Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .clickable(enabled = relay.isReachable == true && !state.isConnectingRelay) {
                   if (isConnected) {
                     onDisconnectRelay()
@@ -995,10 +995,10 @@ fun FreePublicVpnSheet(
         }
       }
 
-      // BLOCK 3: Encrypted DNS (DoH) VPN Box with On/Off Toggle
+      // MODULE 3: Encrypted DNS (DoH) VPN
       item {
         Surface(
-          shape = RoundedCornerShape(18.dp),
+          shape = RoundedCornerShape(20.dp),
           color = voltColors.cardSurface,
           border =
             BorderStroke(
@@ -1018,19 +1018,19 @@ fun FreePublicVpnSheet(
             ) {
               Box(
                 modifier =
-                  Modifier.size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                  Modifier.size(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(
                       if (state.isDnsVpnActive) voltColors.emeraldShield.copy(alpha = 0.18f)
-                      else voltColors.cyanAccent.copy(alpha = 0.14f)
+                      else voltColors.brandAccent.copy(alpha = 0.14f)
                     ),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = Icons.Default.Lock,
                   contentDescription = null,
-                  tint = if (state.isDnsVpnActive) voltColors.emeraldShield else voltColors.cyanAccent,
-                  modifier = Modifier.size(19.dp),
+                  tint = if (state.isDnsVpnActive) voltColors.emeraldShield else voltColors.brandAccent,
+                  modifier = Modifier.size(20.dp),
                 )
               }
               Column(
@@ -1082,7 +1082,7 @@ fun FreePublicVpnSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
               ) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = voltColors.cardBorder.copy(alpha = 0.7f))
 
                 Row(
                   modifier = Modifier.fillMaxWidth(),
@@ -1107,20 +1107,20 @@ fun FreePublicVpnSheet(
                   Row(
                     modifier =
                       Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(
-                          if (selected) voltColors.cyanAccent.copy(alpha = 0.14f)
-                          else MaterialTheme.colorScheme.surfaceContainerLow
+                          if (selected) voltColors.brandAccent.copy(alpha = 0.14f)
+                          else voltColors.cardElevatedSurface
                         )
                         .border(
                           width = 1.dp,
                           color =
-                            if (selected) voltColors.cyanAccent.copy(alpha = 0.55f)
+                            if (selected) voltColors.brandAccent.copy(alpha = 0.55f)
                             else Color.Transparent,
-                          shape = RoundedCornerShape(10.dp),
+                          shape = RoundedCornerShape(12.dp),
                         )
                         .clickable { onSelectDohProvider(provider) }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                   ) {
@@ -1140,8 +1140,8 @@ fun FreePublicVpnSheet(
                       Icon(
                         imageVector = Icons.Default.CheckCircle,
                         contentDescription = "Selected resolver",
-                        tint = voltColors.cyanAccent,
-                        modifier = Modifier.size(16.dp),
+                        tint = voltColors.brandAccent,
+                        modifier = Modifier.size(18.dp),
                       )
                     }
                   }
@@ -1203,7 +1203,7 @@ private fun formatTransferBytes(bytes: Long): String =
   when {
     bytes >= 1_048_576L -> String.format("%.1f MB", bytes / 1_048_576.0)
     bytes >= 1024L -> String.format("%.0f KB", bytes / 1024.0)
-    else -> "${bytes} B"
+    else -> "$bytes B"
   }
 
 @Composable
@@ -1216,7 +1216,7 @@ private fun FilterChipPill(
   val voltColors = LocalVoltColors.current
   Surface(
     shape = RoundedCornerShape(100.dp),
-    color = if (selected) accentColor.copy(alpha = 0.18f) else voltColors.cardSurface,
+    color = if (selected) accentColor.copy(alpha = 0.18f) else voltColors.cardElevatedSurface,
     border =
       BorderStroke(
         width = 1.dp,

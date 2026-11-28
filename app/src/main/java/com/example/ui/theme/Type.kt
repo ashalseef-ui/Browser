@@ -8,9 +8,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.R
 
-val SpaceGroteskFontFamily = FontFamily(Font(R.font.space_grotesk, FontWeight.Normal))
+val OutfitFontFamily = FontFamily(Font(R.font.outfit, FontWeight.Normal))
 
-val PlusJakartaSansFontFamily = FontFamily(Font(R.font.plus_jakarta_sans, FontWeight.Normal))
+val ManropeFontFamily = FontFamily(Font(R.font.manrope, FontWeight.Normal))
 
 val JetBrainsMonoFontFamily = FontFamily(Font(R.font.jetbrains_mono, FontWeight.Normal))
 
@@ -18,72 +18,73 @@ val VoltTypography =
   Typography(
     displaySmall =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
+        fontFamily = OutfitFontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
-        letterSpacing = (-0.5).sp,
+        fontSize = 32.sp,
+        lineHeight = 38.sp,
+        letterSpacing = (-0.75).sp,
       ),
     headlineMedium =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
+        fontFamily = OutfitFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 24.sp,
         lineHeight = 30.sp,
-        letterSpacing = (-0.25).sp,
+        letterSpacing = (-0.4).sp,
       ),
     headlineSmall =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
+        fontFamily = OutfitFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 20.sp,
         lineHeight = 26.sp,
+        letterSpacing = (-0.2).sp,
       ),
     titleLarge =
       TextStyle(
-        fontFamily = SpaceGroteskFontFamily,
+        fontFamily = OutfitFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp,
         lineHeight = 24.sp,
       ),
     titleMedium =
       TextStyle(
-        fontFamily = PlusJakartaSansFontFamily,
+        fontFamily = ManropeFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 15.sp,
-        lineHeight = 20.sp,
+        lineHeight = 21.sp,
       ),
     titleSmall =
       TextStyle(
-        fontFamily = PlusJakartaSansFontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
+        fontFamily = ManropeFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 13.5.sp,
         lineHeight = 18.sp,
       ),
     bodyLarge =
       TextStyle(
-        fontFamily = PlusJakartaSansFontFamily,
+        fontFamily = ManropeFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp,
       ),
     bodyMedium =
       TextStyle(
-        fontFamily = PlusJakartaSansFontFamily,
+        fontFamily = ManropeFontFamily,
         fontWeight = FontWeight.Normal,
-        fontSize = 13.sp,
+        fontSize = 13.5.sp,
         lineHeight = 19.sp,
       ),
     bodySmall =
       TextStyle(
-        fontFamily = PlusJakartaSansFontFamily,
+        fontFamily = ManropeFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 12.sp,
-        lineHeight = 16.sp,
+        lineHeight = 17.sp,
       ),
     labelLarge =
       TextStyle(
-        fontFamily = PlusJakartaSansFontFamily,
+        fontFamily = ManropeFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 13.sp,
         lineHeight = 18.sp,
@@ -94,7 +95,7 @@ val VoltTypography =
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 15.sp,
-        letterSpacing = 0.2.sp,
+        letterSpacing = 0.25.sp,
       ),
     labelSmall =
       TextStyle(
@@ -102,6 +103,6 @@ val VoltTypography =
         fontWeight = FontWeight.Normal,
         fontSize = 10.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.3.sp,
+        letterSpacing = 0.35.sp,
       ),
   )

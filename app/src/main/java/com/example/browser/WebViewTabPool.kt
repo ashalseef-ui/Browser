@@ -23,7 +23,7 @@ import android.view.HapticFeedbackConstants
 import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.example.data.AdBlockerType
+
 import com.example.data.BrowserSettings
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
@@ -258,34 +258,23 @@ class WebViewTabPool(
             return true
           }
           val isMainFrame = request.isForMainFrame
-          if (isMainFrame) {
-            val currentHost = currentUrls[tabId].orEmpty()
-            if (!isHostMediaCompatBypassed(currentHost) &&
-              currentSettings.adBlockerType == AdBlockerType.STRICT &&
-              TurboShield.shouldBlock(uri, AdBlockerType.STRICT)
-            ) {
-              mainScope.launch(Dispatchers.Main) {
-                callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
-              }
+
+          if (url.startsWith("http://", ignoreCase = true)) {
+            val host = normalizeHostKey(url)
+            if (currentSettings.httpsOnlyEnabled && host.isNotEmpty() && !httpsOnlyBypassedHosts.contains(host)) {
+              val upgraded = upgradeHttpToHttps(url)
+              upgradedFromHttpTabs[tabId] = url to upgraded
+              view?.loadUrl(upgraded)
               return true
             }
-            if (url.startsWith("http://", ignoreCase = true)) {
-              val host = normalizeHostKey(url)
-              if (currentSettings.httpsOnlyEnabled && host.isNotEmpty() && !httpsOnlyBypassedHosts.contains(host)) {
-                val upgraded = upgradeHttpToHttps(url)
-                upgradedFromHttpTabs[tabId] = url to upgraded
-                view?.loadUrl(upgraded)
-                return true
+            if (isPublicRelayActiveProvider?.invoke() == true &&
+              host.isNotEmpty() &&
+              !publicProxyHttpBypassHosts.contains(host)
+            ) {
+              mainScope.launch(Dispatchers.Main) {
+                callbacks.onPublicProxyHttpWarning(tabId, url)
               }
-              if (isPublicRelayActiveProvider?.invoke() == true &&
-                host.isNotEmpty() &&
-                !publicProxyHttpBypassHosts.contains(host)
-              ) {
-                mainScope.launch(Dispatchers.Main) {
-                  callbacks.onPublicProxyHttpWarning(tabId, url)
-                }
-                return true
-              }
+              return true
             }
           }
           return false
@@ -322,16 +311,7 @@ class WebViewTabPool(
             }
           }
 
-          if (!isMainFrame &&
-            !isSiteBypassed &&
-            currentSettings.adBlockerType != AdBlockerType.OFF &&
-            TurboShield.shouldBlock(uri, currentSettings.adBlockerType)
-          ) {
-            mainScope.launch(Dispatchers.Main) {
-              callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
-            }
-            return TurboShield.emptyBlockedResponse()
-          }
+
 
           val urlString = uri.toString()
           val pageTitle = currentTitles[tabId].orEmpty()
@@ -367,11 +347,7 @@ class WebViewTabPool(
           val startedAt = pageStartTimestamps.remove(tabId) ?: System.currentTimeMillis()
           val elapsed = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
 
-          if (!isHostMediaCompatBypassed(resolvedUrl)) {
-            TurboShield.cosmeticFilterScript(currentSettings.adBlockerType)?.let { cssScript ->
-              view?.evaluateJavascript(cssScript, null)
-            }
-          }
+
           view?.evaluateJavascript(MediaSniffer.domSnifferScript, null)
 
           if (resolvedUrl.startsWith("https://", ignoreCase = true)) {
@@ -635,19 +611,7 @@ class WebViewTabPool(
           if (isKillSwitchBlocking || !isUserGesture) {
             return false
           }
-          val hitUrl = view?.hitTestResult?.extra
-          if (!hitUrl.isNullOrBlank() && (hitUrl.startsWith("http://") || hitUrl.startsWith("https://"))) {
-            val pageUrl = currentUrls[tabId].orEmpty()
-            if (!isHostMediaCompatBypassed(pageUrl) &&
-              currentSettings.adBlockerType == AdBlockerType.STRICT &&
-              TurboShield.shouldBlock(Uri.parse(hitUrl), AdBlockerType.STRICT)
-            ) {
-              mainScope.launch(Dispatchers.Main) {
-                callbacks.onTrackerBlocked(tabId, TurboShield.ESTIMATED_BYTES_PER_BLOCKED_REQUEST)
-              }
-              return false
-            }
-          }
+
           val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
           val popupIncognito = isIncognito || tabId in incognitoTabIds
           val newTabId = callbacks.onCreatePopupTabRequested(isIncognito = popupIncognito) ?: return false
