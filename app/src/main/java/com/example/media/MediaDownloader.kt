@@ -1,25 +1,12 @@
 package com.example.media
 
-import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.ActivityNotFoundException
-import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
-import android.provider.MediaStore
-import android.util.Base64
 import android.webkit.MimeTypeMap
 import android.webkit.URLUtil
 import androidx.annotation.OptIn
-import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.Clock
 import androidx.media3.common.util.UnstableApi
@@ -33,8 +20,6 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
-import com.example.MainActivity
-import com.example.R
 import com.example.browser.MediaSniffer
 import com.example.browser.PlaylistResolver
 import com.example.data.BrowserRepository
@@ -44,7 +29,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
 import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
@@ -62,11 +46,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-data class DecodedDataUrl(
-  val bytes: ByteArray,
-  val mimeType: String,
-)
-
+/**
+ * Coordinates HTTP direct downloads (with HTTP Range resume support), RFC 2397 `data:` decoding,
+ * and Media3 Transformer remuxing/export of adaptive HLS/DASH streams.
+ */
 class MediaDownloader(
   private val context: Context,
   private val okHttpClient: OkHttpClient,
@@ -74,6 +57,7 @@ class MediaDownloader(
   private val scope: CoroutineScope,
 ) {
   private val activeJobs = ConcurrentHashMap<Long, Job>()
+  private val exportHelper = MediaExportHelper(context)
 
   fun enqueueDownload(
     url: String,
@@ -94,10 +78,8 @@ class MediaDownloader(
 
     val lowerUrl = trimmedUrl.lowercase(Locale.US)
     val cleanMime = normalizeMimeType(mimeType)
-    val isHls =
-      lowerUrl.contains(".m3u8") || cleanMime.equals("application/x-mpegurl", true)
-    val isDash =
-      lowerUrl.contains(".mpd") || cleanMime.equals("application/dash+xml", true)
+    val isHls = lowerUrl.contains(".m3u8") || cleanMime.equals("application/x-mpegurl", true)
+    val isDash = lowerUrl.contains(".mpd") || cleanMime.equals("application/dash+xml", true)
     val isAdaptiveStream = isHls || isDash
 
     val guessedName =
@@ -108,10 +90,7 @@ class MediaDownloader(
       }
     val resolvedName = sanitizeFileNamePreservingExtension(guessedName)
     val resolvedMime =
-      when {
-        isAdaptiveStream -> "video/mp4"
-        else -> resolveMimeType(resolvedName, cleanMime)
-      }
+      if (isAdaptiveStream) "video/mp4" else resolveMimeType(resolvedName, cleanMime)
 
     scope.launch(Dispatchers.IO) {
       val downloadDir = resolveDownloadDirectory()
@@ -126,46 +105,125 @@ class MediaDownloader(
             status = DownloadStatus.DOWNLOADING.name,
           )
         )
-
-      val job =
-        launch {
-          try {
-            if (isAdaptiveStream) {
-              downloadAdaptiveStreamAsMp4(id, trimmedUrl, isHls, targetFile, resolvedMime, referer)
-            } else {
-              downloadDirectFile(
-                id = id,
-                url = trimmedUrl,
-                initialTargetFile = targetFile,
-                initialMimeType = resolvedMime,
-                hadExplicitName = !suggestedFileName.isNullOrBlank() || !contentDisposition.isNullOrBlank(),
-                referer = referer,
-              )
-            }
-          } catch (_: CancellationException) {
-            runCatching { targetFile.delete() }
-            repository.updateDownloadProgress(
-              id = id,
-              downloaded = 0L,
-              total = -1L,
-              status = DownloadStatus.CANCELLED,
-              localPath = targetFile.absolutePath,
-            )
-          } catch (_: Exception) {
-            repository.updateDownloadProgress(
-              id = id,
-              downloaded = targetFile.length(),
-              total = -1L,
-              status = DownloadStatus.FAILED,
-              localPath = targetFile.absolutePath,
-            )
-            postDownloadNotification(id, targetFile.name, "Download failed — tap Retry", ongoing = false)
-          } finally {
-            activeJobs.remove(id)
-          }
-        }
-      activeJobs[id] = job
+      launchDownloadJob(
+        id = id,
+        trimmedUrl = trimmedUrl,
+        isAdaptiveStream = isAdaptiveStream,
+        isHls = isHls,
+        targetFile = targetFile,
+        resolvedMime = resolvedMime,
+        hadExplicitName = !suggestedFileName.isNullOrBlank() || !contentDisposition.isNullOrBlank(),
+        referer = referer,
+        resumePartial = false,
+      )
     }
+  }
+
+  /**
+   * Resumes a failed direct HTTP download using HTTP `Range` when a partial file exists on disk,
+   * or restarts cleanly if adaptive or missing on disk.
+   */
+  fun resumeOrRetryDownload(item: DownloadItemEntity, referer: String? = null) {
+    val trimmedUrl = item.url.trim()
+    val lowerUrl = trimmedUrl.lowercase(Locale.US)
+    val cleanMime = normalizeMimeType(item.mimeType)
+    val isHls = lowerUrl.contains(".m3u8") || cleanMime.equals("application/x-mpegurl", true)
+    val isDash = lowerUrl.contains(".mpd") || cleanMime.equals("application/dash+xml", true)
+    val isAdaptiveStream = isHls || isDash
+    val partialFile = item.localPath.takeIf { it.isNotBlank() }?.let(::File)
+
+    if (isAdaptiveStream || partialFile == null || !partialFile.exists() || partialFile.length() <= 0L) {
+      scope.launch(Dispatchers.IO) {
+        repository.deleteDownload(item.id)
+        enqueueDownload(
+          url = trimmedUrl,
+          suggestedFileName = item.fileName,
+          mimeType = item.mimeType,
+          referer = referer,
+        )
+      }
+      return
+    }
+
+    activeJobs.remove(item.id)?.cancel()
+    scope.launch(Dispatchers.IO) {
+      val existingLen = partialFile.length()
+      repository.updateDownloadProgress(
+        id = item.id,
+        downloaded = existingLen,
+        total = item.totalBytes,
+        status = DownloadStatus.DOWNLOADING,
+        localPath = partialFile.absolutePath,
+      )
+      launchDownloadJob(
+        id = item.id,
+        trimmedUrl = trimmedUrl,
+        isAdaptiveStream = false,
+        isHls = false,
+        targetFile = partialFile,
+        resolvedMime = resolveMimeType(item.fileName, item.mimeType),
+        hadExplicitName = true,
+        referer = referer,
+        resumePartial = true,
+      )
+    }
+  }
+
+  private fun CoroutineScope.launchDownloadJob(
+    id: Long,
+    trimmedUrl: String,
+    isAdaptiveStream: Boolean,
+    isHls: Boolean,
+    targetFile: File,
+    resolvedMime: String,
+    hadExplicitName: Boolean,
+    referer: String?,
+    resumePartial: Boolean,
+  ) {
+    val job =
+      launch {
+        try {
+          if (isAdaptiveStream) {
+            downloadAdaptiveStreamAsMp4(id, trimmedUrl, isHls, targetFile, resolvedMime, referer)
+          } else {
+            downloadDirectFile(
+              id = id,
+              url = trimmedUrl,
+              initialTargetFile = targetFile,
+              initialMimeType = resolvedMime,
+              hadExplicitName = hadExplicitName,
+              referer = referer,
+              allowResume = resumePartial,
+            )
+          }
+        } catch (_: CancellationException) {
+          runCatching { targetFile.delete() }
+          repository.updateDownloadProgress(
+            id = id,
+            downloaded = 0L,
+            total = -1L,
+            status = DownloadStatus.CANCELLED,
+            localPath = targetFile.absolutePath,
+          )
+        } catch (_: Exception) {
+          repository.updateDownloadProgress(
+            id = id,
+            downloaded = targetFile.length(),
+            total = -1L,
+            status = DownloadStatus.FAILED,
+            localPath = targetFile.absolutePath,
+          )
+          exportHelper.postDownloadNotification(
+            id,
+            targetFile.name,
+            "Download interrupted — tap Resume",
+            ongoing = false,
+          )
+        } finally {
+          activeJobs.remove(id)
+        }
+      }
+    activeJobs[id] = job
   }
 
   private fun enqueueDataUrlDownload(
@@ -207,7 +265,7 @@ class MediaDownloader(
           out.write(decoded.bytes)
           out.flush()
         }
-        val exported = exportFileToPublicDownloads(targetFile, targetFile.name, resolvedMime)
+        val exported = exportHelper.exportFileToPublicDownloads(targetFile, targetFile.name, resolvedMime)
         repository.updateDownloadProgress(
           id = id,
           downloaded = decoded.bytes.size.toLong(),
@@ -215,7 +273,7 @@ class MediaDownloader(
           status = DownloadStatus.COMPLETED,
           localPath = targetFile.absolutePath,
         )
-        postDownloadNotification(
+        exportHelper.postDownloadNotification(
           id = id,
           title = targetFile.name,
           message =
@@ -255,20 +313,32 @@ class MediaDownloader(
     initialMimeType: String,
     hadExplicitName: Boolean = true,
     referer: String?,
+    allowResume: Boolean = false,
   ) {
-    okHttpClient.newCall(buildRequest(url, referer)).execute().use { response ->
+    val existingBytes =
+      if (allowResume && initialTargetFile.exists()) initialTargetFile.length().coerceAtLeast(0L)
+      else 0L
+    val request = buildResumeRequest(url, referer, existingBytes)
+
+    okHttpClient.newCall(request).execute().use { response ->
       if (!response.isSuccessful || response.body == null) {
         repository.updateDownloadProgress(
           id = id,
-          downloaded = 0L,
+          downloaded = existingBytes,
           total = -1L,
           status = DownloadStatus.FAILED,
           localPath = initialTargetFile.absolutePath,
         )
-        postDownloadNotification(id, initialTargetFile.name, "Download failed (${response.code})", ongoing = false)
+        exportHelper.postDownloadNotification(
+          id,
+          initialTargetFile.name,
+          "Download failed (${response.code})",
+          ongoing = false,
+        )
         return
       }
 
+      val isResumed206 = existingBytes > 0L && response.code == 206
       val responseDisposition = response.header("Content-Disposition")
       val responseContentType = normalizeMimeType(response.header("Content-Type"))
       val finalRequestUrl = response.request.url.toString()
@@ -279,24 +349,26 @@ class MediaDownloader(
           initialMimeType
         }
 
-      // Refine filename if server sent Content-Disposition or concrete MIME for an untyped URL
       var targetFile = initialTargetFile
-      val headerFileName = parseDispositionFileName(responseDisposition)
-      if (!headerFileName.isNullOrBlank()) {
-        val cleaned =
-          sanitizeFileNamePreservingExtension(
-            ensureFileExtension(headerFileName, effectiveMime, isAdaptiveStream = false)
-          )
-        if (cleaned != targetFile.name) {
-          targetFile = uniqueTargetFile(targetFile.parentFile ?: resolveDownloadDirectory(), cleaned)
-        }
-      } else if (!hadExplicitName || targetFile.name.endsWith(".bin", ignoreCase = true)) {
-        val guessed = guessDownloadFileName(finalRequestUrl, responseDisposition, effectiveMime, false)
-        val cleaned = sanitizeFileNamePreservingExtension(guessed)
-        if (cleaned != targetFile.name && !cleaned.endsWith(".bin", ignoreCase = true)) {
-          targetFile = uniqueTargetFile(targetFile.parentFile ?: resolveDownloadDirectory(), cleaned)
+      if (!isResumed206) {
+        val headerFileName = parseDispositionFileName(responseDisposition)
+        if (!headerFileName.isNullOrBlank()) {
+          val cleaned =
+            sanitizeFileNamePreservingExtension(
+              ensureFileExtension(headerFileName, effectiveMime, isAdaptiveStream = false)
+            )
+          if (cleaned != targetFile.name) {
+            targetFile = uniqueTargetFile(targetFile.parentFile ?: resolveDownloadDirectory(), cleaned)
+          }
+        } else if (!hadExplicitName || targetFile.name.endsWith(".bin", ignoreCase = true)) {
+          val guessed = guessDownloadFileName(finalRequestUrl, responseDisposition, effectiveMime, false)
+          val cleaned = sanitizeFileNamePreservingExtension(guessed)
+          if (cleaned != targetFile.name && !cleaned.endsWith(".bin", ignoreCase = true)) {
+            targetFile = uniqueTargetFile(targetFile.parentFile ?: resolveDownloadDirectory(), cleaned)
+          }
         }
       }
+
       val resolvedFinalMime = resolveMimeType(targetFile.name, effectiveMime)
       if (targetFile.name != initialTargetFile.name || resolvedFinalMime != initialMimeType) {
         repository.updateDownloadMetadata(
@@ -308,13 +380,24 @@ class MediaDownloader(
       }
 
       val body = response.body!!
-      val totalBytes = body.contentLength()
-      var downloadedBytes = 0L
-      var lastReported = 0L
+      val baseOffset = if (isResumed206) existingBytes else 0L
+      val totalBytes =
+        if (isResumed206) {
+          parseContentRangeTotalBytes(
+            contentRange = response.header("Content-Range"),
+            existingBytes = existingBytes,
+            remainingLength = body.contentLength(),
+          )
+        } else {
+          body.contentLength()
+        }
+
+      var downloadedBytes = baseOffset
+      var lastReported = baseOffset
       val buffer = ByteArray(16 * 1024)
 
       body.byteStream().use { input ->
-        FileOutputStream(targetFile).use { output ->
+        FileOutputStream(targetFile, isResumed206).use { output ->
           while (true) {
             coroutineContext.ensureActive()
             val read = input.read(buffer)
@@ -348,7 +431,7 @@ class MediaDownloader(
       }
 
       val exportedToPublic =
-        exportFileToPublicDownloads(targetFile, targetFile.name, resolvedFinalMime)
+        exportHelper.exportFileToPublicDownloads(targetFile, targetFile.name, resolvedFinalMime)
 
       repository.updateDownloadProgress(
         id = id,
@@ -357,7 +440,7 @@ class MediaDownloader(
         status = DownloadStatus.COMPLETED,
         localPath = targetFile.absolutePath,
       )
-      postDownloadNotification(
+      exportHelper.postDownloadNotification(
         id = id,
         title = targetFile.name,
         message =
@@ -388,19 +471,17 @@ class MediaDownloader(
         else fetchText(mediaPlaylistUrl, referer) ?: throw IllegalStateException("Variant fetch failed")
       val stats = PlaylistResolver.parseHlsMediaPlaylistStats(mediaPlaylistUrl, mediaPlaylistText)
 
-      // Fast path: if HLS references a single full .mp4 via #EXT-X-BYTERANGE, download it directly
       if (stats.hasByteRange && stats.directMp4Urls.size == 1) {
         downloadDirectFile(id, stats.directMp4Urls.first(), targetFile, "video/mp4", referer = referer)
         return
       }
     }
 
-    // Best-practice Media3 Transformer remux/export into a clean seekable .mp4 file
     val remuxedOk = exportWithMedia3Transformer(id, playlistUrl, isHls, targetFile, referer)
     if (remuxedOk && targetFile.exists() && targetFile.length() > 0L) {
       val size = targetFile.length()
       val exportedToPublic =
-        exportFileToPublicDownloads(targetFile, targetFile.name, "video/mp4")
+        exportHelper.exportFileToPublicDownloads(targetFile, targetFile.name, "video/mp4")
       repository.updateDownloadProgress(
         id = id,
         downloaded = size,
@@ -408,7 +489,7 @@ class MediaDownloader(
         status = DownloadStatus.COMPLETED,
         localPath = targetFile.absolutePath,
       )
-      postDownloadNotification(
+      exportHelper.postDownloadNotification(
         id = id,
         title = targetFile.name,
         message =
@@ -422,7 +503,6 @@ class MediaDownloader(
     }
 
     if (isHls) {
-      // Fallback: direct segment assembly if Transformer rejects an unusual container/header
       val fallbackFile = renameExtension(targetFile, "ts")
       repository.updateDownloadMetadata(id, fallbackFile.name, "video/mp2t", fallbackFile.absolutePath)
       downloadHlsStream(id, playlistUrl, fallbackFile, "video/mp2t", referer)
@@ -572,7 +652,6 @@ class MediaDownloader(
     val stats = PlaylistResolver.parseHlsMediaPlaylistStats(mediaPlaylistUrl, mediaPlaylistText)
     if (stats.segmentUrls.isEmpty()) throw IllegalStateException("No segments in playlist")
 
-    // If HLS points to a single full .mp4 via #EXT-X-BYTERANGE, download that MP4 directly!
     if (stats.hasByteRange && stats.directMp4Urls.size == 1) {
       val mp4File = renameExtension(initialTargetFile, "mp4")
       downloadDirectFile(id, stats.directMp4Urls.first(), mp4File, "video/mp4", referer = referer)
@@ -599,7 +678,6 @@ class MediaDownloader(
 
     var totalWritten = 0L
     FileOutputStream(finalTargetFile).use { output ->
-      // Write fMP4 init segment first if present (#EXT-X-MAP)
       stats.initMapUrl?.let { mapUrl ->
         val mapBytes = fetchBytes(mapUrl, referer)
         if (mapBytes != null) {
@@ -628,12 +706,10 @@ class MediaDownloader(
       output.flush()
     }
 
-    if (totalWritten <= 0L) {
-      throw IllegalStateException("Empty HLS download")
-    }
+    if (totalWritten <= 0L) throw IllegalStateException("Empty HLS download")
 
     val exportedToPublic =
-      exportFileToPublicDownloads(finalTargetFile, finalTargetFile.name, finalMime)
+      exportHelper.exportFileToPublicDownloads(finalTargetFile, finalTargetFile.name, finalMime)
 
     repository.updateDownloadProgress(
       id = id,
@@ -642,7 +718,7 @@ class MediaDownloader(
       status = DownloadStatus.COMPLETED,
       localPath = finalTargetFile.absolutePath,
     )
-    postDownloadNotification(
+    exportHelper.postDownloadNotification(
       id = id,
       title = finalTargetFile.name,
       message =
@@ -674,7 +750,8 @@ class MediaDownloader(
             ?.groupValues
             ?.getOrNull(1)
             ?.toLongOrNull() ?: 0L
-        val nextLine = lines.drop(i + 1).firstOrNull { it.trim().isNotEmpty() && !it.trim().startsWith("#") }?.trim()
+        val nextLine =
+          lines.drop(i + 1).firstOrNull { it.trim().isNotEmpty() && !it.trim().startsWith("#") }?.trim()
         if (nextLine != null && bw >= bestBandwidth) {
           val resolved = runCatching { base.resolve(nextLine).toString() }.getOrNull()
           if (resolved != null) {
@@ -711,169 +788,17 @@ class MediaDownloader(
     jobs.forEach { it.cancel() }
   }
 
-  fun exportToPublicDownloads(item: DownloadItemEntity): Boolean {
-    val sourceFile = File(item.localPath)
-    if (!sourceFile.exists()) return false
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-      shareDownloadedFile(item)
-      return true
-    }
-    val resolvedMime = resolveMimeType(item.fileName, item.mimeType)
-    return exportFileToPublicDownloads(sourceFile, item.fileName, resolvedMime)
-  }
+  fun exportToPublicDownloads(item: DownloadItemEntity): Boolean =
+    exportHelper.exportToPublicDownloads(item)
 
-  private fun exportFileToPublicDownloads(
-    sourceFile: File,
-    fileName: String,
-    mimeType: String,
-  ): Boolean {
-    if (!sourceFile.exists() || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-    val safeMime = resolveMimeType(fileName, mimeType)
-    return runCatching {
-      val resolver = context.contentResolver
-      val values =
-        ContentValues().apply {
-          put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-          put(MediaStore.Downloads.MIME_TYPE, safeMime)
-          put(MediaStore.MediaColumns.SIZE, sourceFile.length())
-          put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/VoltBrowser")
-          put(MediaStore.Downloads.IS_PENDING, 1)
-        }
-      val destUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-      resolver.openOutputStream(destUri)?.use { out ->
-        sourceFile.inputStream().use { input -> input.copyTo(out) }
-        out.flush()
-      } ?: return false
-      values.clear()
-      values.put(MediaStore.Downloads.IS_PENDING, 0)
-      resolver.update(destUri, values, null, null)
-      true
-    }.getOrDefault(false)
-  }
+  fun copyDownloadedFileToUri(item: DownloadItemEntity, destUri: Uri): Boolean =
+    exportHelper.copyDownloadedFileToUri(item, destUri)
 
-  fun copyDownloadedFileToUri(item: DownloadItemEntity, destUri: Uri): Boolean {
-    val sourceFile = File(item.localPath)
-    if (!sourceFile.exists()) return false
-    return runCatching {
-      context.contentResolver.openOutputStream(destUri)?.use { out ->
-        sourceFile.inputStream().use { input -> input.copyTo(out) }
-        out.flush()
-      } != null
-    }.getOrDefault(false)
-  }
+  fun openDownloadedFile(item: DownloadItemEntity): Boolean =
+    exportHelper.openDownloadedFile(item)
 
-  fun openDownloadedFile(item: DownloadItemEntity): Boolean {
-    val file = File(item.localPath)
-    if (!file.exists()) return false
-    val uri =
-      FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val resolvedMime = resolveMimeType(item.fileName, item.mimeType)
-    val viewIntent =
-      Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, resolvedMime)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
-    val chooser =
-      Intent.createChooser(viewIntent, "Open ${item.fileName}").apply {
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
-    return try {
-      context.startActivity(chooser)
-      true
-    } catch (_: ActivityNotFoundException) {
-      false
-    } catch (_: Exception) {
-      false
-    }
-  }
-
-  fun shareDownloadedFile(item: DownloadItemEntity) {
-    val file = File(item.localPath)
-    if (!file.exists()) return
-    val uri =
-      FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val resolvedMime = resolveMimeType(item.fileName, item.mimeType)
-    val shareIntent =
-      Intent(Intent.ACTION_SEND).apply {
-        type = resolvedMime
-        putExtra(Intent.EXTRA_STREAM, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-      }
-    val chooser =
-      Intent.createChooser(shareIntent, item.fileName).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
-    runCatching { context.startActivity(chooser) }
-  }
-
-  private fun postDownloadNotification(
-    id: Long,
-    title: String,
-    message: String,
-    ongoing: Boolean,
-    targetFile: File? = null,
-    mimeType: String? = null,
-  ) {
-    if (
-      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-          PackageManager.PERMISSION_GRANTED
-    ) {
-      return
-    }
-    runCatching {
-      val manager = context.getSystemService(NotificationManager::class.java) ?: return
-      val channelId = "volt_downloads"
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val channel =
-          NotificationChannel(
-            channelId,
-            "Volt Downloads",
-            NotificationManager.IMPORTANCE_DEFAULT,
-          )
-        manager.createNotificationChannel(channel)
-      }
-      val contentIntent =
-        if (!ongoing && targetFile != null && targetFile.exists()) {
-          runCatching {
-            val fileUri =
-              FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
-            val viewIntent =
-              Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(fileUri, resolveMimeType(targetFile.name, mimeType))
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-              }
-            PendingIntent.getActivity(
-              context,
-              5000 + id.toInt(),
-              viewIntent,
-              PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-          }.getOrNull()
-        } else {
-          null
-        } ?: PendingIntent.getActivity(
-          context,
-          5000 + id.toInt(),
-          Intent(context, MainActivity::class.java),
-          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-      val notification =
-        NotificationCompat.Builder(context, channelId)
-          .setSmallIcon(R.drawable.ic_volt_stat)
-          .setContentTitle(title)
-          .setContentText(message)
-          .setContentIntent(contentIntent)
-          .setOngoing(ongoing)
-          .setAutoCancel(!ongoing)
-          .build()
-      manager.notify(5000 + id.toInt(), notification)
-    }
-  }
+  fun shareDownloadedFile(item: DownloadItemEntity) =
+    exportHelper.shareDownloadedFile(item)
 
   private fun uniqueTargetFile(dir: File, name: String): File {
     var candidate = File(dir, name)
@@ -891,6 +816,8 @@ class MediaDownloader(
   }
 
   companion object {
+    const val MAX_DATA_URL_BYTES = DataUrlDecoder.MAX_DATA_URL_BYTES
+
     private val EXT_TO_MIME =
       mapOf(
         "pdf" to "application/pdf",
@@ -942,6 +869,25 @@ class MediaDownloader(
           "application/octet-stream" to "bin",
         )
 
+    fun buildResumeRequest(url: String, referer: String?, existingBytes: Long): Request {
+      val builder = MediaSniffer.buildBrowserRequestBuilder(url, referer)
+      if (existingBytes > 0L) {
+        builder.header("Range", "bytes=$existingBytes-")
+      }
+      return builder.build()
+    }
+
+    fun parseContentRangeTotalBytes(
+      contentRange: String?,
+      existingBytes: Long,
+      remainingLength: Long,
+    ): Long {
+      val totalToken = contentRange?.substringAfterLast('/')?.trim()
+      val parsedTotal = totalToken?.toLongOrNull()
+      if (parsedTotal != null && parsedTotal > 0L) return parsedTotal
+      return if (remainingLength > 0L) existingBytes + remainingLength else -1L
+    }
+
     fun normalizeMimeType(rawMime: String?): String =
       rawMime?.substringBefore(';')?.trim()?.lowercase(Locale.US).orEmpty()
 
@@ -960,7 +906,6 @@ class MediaDownloader(
 
     fun parseDispositionFileName(contentDisposition: String?): String? {
       if (contentDisposition.isNullOrBlank()) return null
-      // RFC 5987 filename*=UTF-8''encoded_name.ext
       val extMatch =
         Regex("""filename\*\s*=\s*(?:UTF-8|utf-8)''([^;\r\n]+)""")
           .find(contentDisposition)
@@ -971,12 +916,12 @@ class MediaDownloader(
           runCatching { URLDecoder.decode(extMatch.trim('"', '\'', ' '), "UTF-8") }.getOrNull()
         if (!decoded.isNullOrBlank()) return decoded
       }
-      // Standard filename="report.pdf" or filename=report.pdf
       val plainMatch =
         Regex("""filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;\r\n]+)""", RegexOption.IGNORE_CASE)
           .find(contentDisposition)
-      val raw = plainMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
-        ?: plainMatch?.groupValues?.getOrNull(2)?.takeIf { it.isNotBlank() }
+      val raw =
+        plainMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+          ?: plainMatch?.groupValues?.getOrNull(2)?.takeIf { it.isNotBlank() }
       return raw?.trim('"', '\'', ' ')
     }
 
@@ -1017,7 +962,7 @@ class MediaDownloader(
         return ensureFileExtension(urlGuessed, cleanMime, isAdaptiveStream = false)
       }
       val lastSegment =
-        runCatching { Uri.parse(url).lastPathSegment }
+        runCatching { url.toUri().lastPathSegment }
           .getOrNull()
           ?.takeIf { it.isNotBlank() && it != "/" }
       val base = lastSegment ?: "volt_file_${System.currentTimeMillis() % 100_000}"
@@ -1041,28 +986,6 @@ class MediaDownloader(
       return "${base.ifBlank { "volt_file" }}.$ext"
     }
 
-    const val MAX_DATA_URL_BYTES = 25 * 1024 * 1024
-
-    fun parseDataUrl(dataUrl: String): DecodedDataUrl? {
-      if (!dataUrl.startsWith("data:", ignoreCase = true)) return null
-      if (dataUrl.length > 36_000_000) return null
-      val commaIdx = dataUrl.indexOf(',')
-      if (commaIdx <= 4 || commaIdx >= dataUrl.length) return null
-      val header = dataUrl.substring(5, commaIdx)
-      val payload = dataUrl.substring(commaIdx + 1)
-      val isBase64 = header.contains(";base64", ignoreCase = true)
-      val rawMime = header.substringBefore(';').trim().lowercase(Locale.US)
-      val mime = rawMime.ifBlank { "application/octet-stream" }
-      val bytes =
-        runCatching {
-          if (isBase64) {
-            Base64.decode(payload, Base64.DEFAULT)
-          } else {
-            URLDecoder.decode(payload, "UTF-8").toByteArray(StandardCharsets.UTF_8)
-          }
-        }.getOrNull() ?: return null
-      if (bytes.isEmpty() || bytes.size > MAX_DATA_URL_BYTES) return null
-      return DecodedDataUrl(bytes = bytes, mimeType = mime)
-    }
+    fun parseDataUrl(dataUrl: String): DecodedDataUrl? = DataUrlDecoder.parse(dataUrl)
   }
 }

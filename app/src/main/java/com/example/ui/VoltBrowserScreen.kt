@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,42 +28,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -76,12 +48,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -89,7 +58,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.R
 import com.example.data.WebContextMenuTarget
 import com.example.ui.components.EdgeGestureOverlay
 import com.example.ui.components.OmniboxDock
@@ -108,6 +76,10 @@ import com.example.ui.screens.TabSwitcherOverlay
 import com.example.ui.screens.WebContextMenuSheet
 import com.example.ui.theme.LocalVoltColors
 
+/**
+ * Root adaptive Compose shell orchestrating Speed Dial / WebView stage, bottom Omnibox dock,
+ * tablet NavigationRail, fullscreen Media3 player, and modal sheets.
+ */
 @Composable
 fun VoltBrowserScreen(
   viewModel: BrowserViewModel,
@@ -325,108 +297,21 @@ fun VoltBrowserScreen(
     ) { innerPadding ->
       Row(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding())) {
         if (isWideScreen && !isInPipMode && !isBrowserFullscreen) {
-          NavigationRail(
-            containerColor = voltColors.dockSurface,
-            modifier =
-              Modifier.statusBarsPadding().let {
-                if (!bottomBarConsumesNavInset) it.navigationBarsPadding() else it
-              },
-          ) {
-            Spacer(modifier = Modifier.weight(0.2f))
-            NavigationRailItem(
-              selected = activeTab.isSpeedDial,
-              onClick = { viewModel.goHome() },
-              icon = { Icon(Icons.Default.Home, contentDescription = stringResource(R.string.cd_home)) },
-              label = { Text("Start") },
-            )
-            NavigationRailItem(
-              selected = false,
-              onClick = { viewModel.goBack() },
-              enabled = !activeTab.isSpeedDial,
-              icon = {
-                Icon(
-                  Icons.AutoMirrored.Filled.ArrowBack,
-                  contentDescription = stringResource(R.string.cd_back),
-                )
-              },
-              label = { Text("Back") },
-            )
-            NavigationRailItem(
-              selected = false,
-              onClick = { viewModel.goForward() },
-              enabled = activeTab.canGoForward,
-              icon = {
-                Icon(
-                  Icons.AutoMirrored.Filled.ArrowForward,
-                  contentDescription = stringResource(R.string.cd_forward),
-                )
-              },
-              label = { Text("Fwd") },
-            )
-            NavigationRailItem(
-              selected = activeSheet == BrowserSheet.TAB_SWITCHER,
-              onClick = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
-              icon = {
-                BadgedBox(badge = { Badge { Text("${tabs.size}") } }) {
-                  Icon(Icons.Default.Layers, contentDescription = stringResource(R.string.cd_tabs))
-                }
-              },
-              label = { Text("Deck") },
-            )
-            NavigationRailItem(
-              selected = activeSheet == BrowserSheet.MEDIA_HUB,
-              onClick = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
-              icon = {
-                BadgedBox(
-                  badge = {
-                    if (activeTab.detectedMedia.isNotEmpty()) {
-                      Badge { Text("${activeTab.detectedMedia.size}") }
-                    }
-                  }
-                ) {
-                  Icon(
-                    Icons.Default.VideoLibrary,
-                    contentDescription = stringResource(R.string.cd_media_detected),
-                  )
-                }
-              },
-              label = { Text("Media") },
-            )
-            NavigationRailItem(
-              selected = activeSheet == BrowserSheet.VPN,
-              onClick = { viewModel.onVpnSheetOpened() },
-              icon = {
-                Icon(
-                  Icons.Default.Public,
-                  contentDescription = stringResource(R.string.cd_vpn_status),
-                  tint =
-                    if (vpnState.isAnyProtectionActive) voltColors.emeraldShield
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              },
-              label = { Text("Tunnel") },
-            )
-            NavigationRailItem(
-              selected = activeSheet == BrowserSheet.LIBRARY_SETTINGS,
-              onClick = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
-              icon = { Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.cd_menu)) },
-              label = { Text("Menu") },
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            NavigationRailItem(
-              selected = activeSheet == BrowserSheet.EXIT_CONFIRM,
-              onClick = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
-              icon = {
-                Icon(
-                  Icons.Default.PowerSettingsNew,
-                  contentDescription = stringResource(R.string.cd_exit),
-                  tint = MaterialTheme.colorScheme.error,
-                )
-              },
-              label = { Text("Exit", color = MaterialTheme.colorScheme.error) },
-              modifier = Modifier.testTag("rail_exit_button"),
-            )
-          }
+          BrowserNavigationRail(
+            activeTab = activeTab,
+            tabCount = tabs.size,
+            activeSheet = activeSheet,
+            isVpnActive = vpnState.isAnyProtectionActive,
+            bottomBarConsumesNavInset = bottomBarConsumesNavInset,
+            onHome = { viewModel.goHome() },
+            onBack = { viewModel.goBack() },
+            onForward = viewModel::goForward,
+            onOpenTabs = { viewModel.openSheet(BrowserSheet.TAB_SWITCHER) },
+            onOpenMediaHub = { viewModel.openSheet(BrowserSheet.MEDIA_HUB) },
+            onOpenVpnSheet = { viewModel.onVpnSheetOpened() },
+            onOpenMenu = { viewModel.openSheet(BrowserSheet.LIBRARY_SETTINGS) },
+            onRequestExit = { viewModel.openSheet(BrowserSheet.EXIT_CONFIRM) },
+          )
         }
 
         Column(
@@ -543,85 +428,14 @@ fun VoltBrowserScreen(
               }
 
               activeTab.httpsWarning?.let { warning ->
-                Surface(
-                  color = MaterialTheme.colorScheme.background,
-                  modifier = Modifier.fillMaxSize().testTag("https_warning_overlay"),
-                ) {
-                  Column(
-                    modifier =
-                      Modifier.fillMaxSize()
-                        .padding(horizontal = 24.dp, vertical = 32.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                  ) {
-                    Surface(
-                      shape = RoundedCornerShape(22.dp),
-                      color = voltColors.amberAccent.copy(alpha = 0.14f),
-                      border = BorderStroke(1.dp, voltColors.amberAccent.copy(alpha = 0.45f)),
-                      modifier = Modifier.size(72.dp),
-                    ) {
-                      Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                          imageVector = Icons.Default.Warning,
-                          contentDescription = null,
-                          tint = voltColors.amberAccent,
-                          modifier = Modifier.size(36.dp),
-                        )
-                      }
-                    }
-                    Spacer(modifier = Modifier.size(20.dp))
-                    Text(
-                      text =
-                        if (warning.isPublicProxyWarning) "Unencrypted HTTP Over Public Proxy"
-                        else "HTTPS Connection Unavailable",
-                      style = MaterialTheme.typography.headlineSmall,
-                      color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(modifier = Modifier.size(10.dp))
-                    Text(
-                      text =
-                        if (warning.isPublicProxyWarning) {
-                          "${extractHost(warning.fallbackHttpUrl)} uses plain HTTP. ${warning.reason}"
-                        } else {
-                          "HTTPS-Only Mode could not load ${extractHost(warning.fallbackHttpUrl)} over HTTPS (${warning.reason})."
-                        },
-                      style = MaterialTheme.typography.bodyMedium,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(modifier = Modifier.size(24.dp))
-                    if (warning.isPublicProxyWarning) {
-                      Button(
-                        onClick = {
-                          viewModel.tryHttpsInstead(activeTab.id, warning.failedUrl)
-                        },
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("try_https_button"),
-                      ) {
-                        Text("Try HTTPS Instead")
-                      }
-                      Spacer(modifier = Modifier.size(10.dp))
-                    }
-                    OutlinedButton(
-                      onClick = { viewModel.dismissHttpsWarning(activeTab.id) },
-                      shape = RoundedCornerShape(14.dp),
-                      modifier = Modifier.fillMaxWidth().testTag("https_warning_back_button"),
-                    ) {
-                      Text("Go Back")
-                    }
-                    Spacer(modifier = Modifier.size(8.dp))
-                    TextButton(
-                      onClick = {
-                        viewModel.proceedWithInsecureHttp(activeTab.id, warning.fallbackHttpUrl)
-                      },
-                      modifier = Modifier.testTag("continue_http_button"),
-                    ) {
-                      Text(
-                        text = "Continue Anyway (Insecure HTTP)",
-                        color = MaterialTheme.colorScheme.error,
-                      )
-                    }
-                  }
-                }
+                HttpsWarningOverlay(
+                  warning = warning,
+                  onTryHttps = { viewModel.tryHttpsInstead(activeTab.id, warning.failedUrl) },
+                  onGoBack = { viewModel.dismissHttpsWarning(activeTab.id) },
+                  onContinueInsecure = {
+                    viewModel.proceedWithInsecureHttp(activeTab.id, warning.fallbackHttpUrl)
+                  },
+                )
               }
             }
 
@@ -791,7 +605,10 @@ fun VoltBrowserScreen(
           onToggleLiteMode = viewModel::toggleLiteMode,
           onToggleHttpsOnly = viewModel::toggleHttpsOnly,
           onToggleDarkWeb = viewModel::toggleDarkWeb,
+          onToggleSiteJs = viewModel::toggleCurrentSiteJs,
+          onToggleSiteDesktop = viewModel::toggleCurrentSiteDesktop,
           onToggleSiteMediaBypass = viewModel::toggleCurrentSiteMediaCompatBypass,
+          onResetSiteSettings = viewModel::resetCurrentSiteSettings,
           onClearSitePermissions = viewModel::clearSitePermissions,
           onWipeSessionNow = viewModel::wipeSessionCacheAndCookies,
           onDismiss = viewModel::closeSheet,
@@ -913,144 +730,10 @@ fun VoltBrowserScreen(
     }
 
     pendingSitePermissionPrompt?.let { prompt ->
-      val permLabels = prompt.requestedTypes.joinToString(", ") { it.label }
-      AlertDialog(
-        onDismissRequest = {
-          viewModel.respondToSitePermissionPrompt(granted = false, rememberForSite = false)
-        },
-        icon = {
-          Icon(
-            imageVector = Icons.Default.Security,
-            contentDescription = null,
-            tint = voltColors.brandAccent,
-          )
-        },
-        title = { Text("Permission Request") },
-        text = {
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-              text = "${prompt.host} wants to access: $permLabels",
-              style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-              text =
-                if (prompt.isIncognito) {
-                  "Private tab: permissions are never saved beyond this session."
-                } else {
-                  "You can allow once, allow for ${prompt.host}, or deny."
-                },
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        },
-        confirmButton = {
-          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              OutlinedButton(
-                onClick = {
-                  viewModel.respondToSitePermissionPrompt(granted = true, rememberForSite = false)
-                },
-                modifier = Modifier.testTag("site_perm_allow_once_button"),
-              ) {
-                Text("Allow once")
-              }
-              Button(
-                onClick = {
-                  viewModel.respondToSitePermissionPrompt(granted = true, rememberForSite = true)
-                },
-                modifier = Modifier.testTag("site_perm_allow_site_button"),
-              ) {
-                Text(if (prompt.isIncognito) "Allow session" else "Allow site")
-              }
-            }
-          }
-        },
-        dismissButton = {
-          TextButton(
-            onClick = {
-              viewModel.respondToSitePermissionPrompt(granted = false, rememberForSite = false)
-            },
-            modifier = Modifier.testTag("site_perm_deny_button"),
-          ) {
-            Text("Deny")
-          }
-        },
+      SitePermissionPromptDialog(
+        prompt = prompt,
+        onDecision = viewModel::respondToSitePermissionPrompt,
       )
-    }
-  }
-}
-
-@Composable
-private fun FindInPageBar(
-  onQueryChange: (String) -> Unit,
-  onFindNext: (String) -> Unit,
-  onFindPrev: (String) -> Unit,
-  onClose: () -> Unit,
-) {
-  val voltColors = LocalVoltColors.current
-  var query by remember { mutableStateOf("") }
-
-  Surface(
-    color = voltColors.dockSurface,
-    border = BorderStroke(1.dp, voltColors.cardBorder.copy(alpha = 0.6f)),
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = voltColors.omniboxSurface,
-        border = BorderStroke(1.dp, voltColors.cardBorder),
-        modifier = Modifier.weight(1f),
-      ) {
-        Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-          if (query.isEmpty()) {
-            Text(
-              text = "Find in page...",
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-          BasicTextField(
-            value = query,
-            onValueChange = {
-              query = it
-              onQueryChange(it)
-            },
-            singleLine = true,
-            textStyle =
-              MaterialTheme.typography.bodyMedium.copy(
-                color = MaterialTheme.colorScheme.onSurface
-              ),
-            cursorBrush = SolidColor(voltColors.brandAccent),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { onFindNext(query) }),
-            modifier = Modifier.fillMaxWidth(),
-          )
-        }
-      }
-      IconButton(
-        onClick = { onFindPrev(query) },
-        modifier = Modifier.minimumInteractiveComponentSize(),
-      ) {
-        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Previous match")
-      }
-      IconButton(
-        onClick = { onFindNext(query) },
-        modifier = Modifier.minimumInteractiveComponentSize(),
-      ) {
-        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Next match")
-      }
-      IconButton(
-        onClick = onClose,
-        modifier = Modifier.minimumInteractiveComponentSize(),
-      ) {
-        Icon(Icons.Default.Close, contentDescription = "Close find bar")
-      }
     }
   }
 }

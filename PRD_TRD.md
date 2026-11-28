@@ -51,7 +51,7 @@ Unlike bloated browsers or third-party wrapper tools, Volt Browser combines a lo
 #### FR-3: Media Studio (Sniffer, Player & Downloader)
 - **Passive & DOM Sniffing:** Detects direct video/audio URLs (`mp4`, `webm`, `mkv`, `mp3`, `m4a`, etc.), HLS playlists (`.m3u8`), DASH manifests (`.mpd`), and classic playlists (`.m3u`, `.pls`, `.xspf`).
 - **Playback:** Integrated Media3 ExoPlayer overlay with seek controls, fullscreen mode, background audio service (`VoltMediaService`), mini-player bar, and Android Picture-in-Picture.
-- **Downloading:** Downloads direct files, decodes `data:` / `blob:` payloads, and converts/muxes adaptive HLS/DASH streams into `.mp4` via Media3 `Transformer`, reporting progress in-app and via system notifications.
+- **Downloading:** Downloads direct files (with HTTP `Range` `206 Partial Content` resume on interrupted transfers), decodes `data:` / `blob:` payloads, and converts/muxes adaptive HLS/DASH streams into `.mp4` via Media3 `Transformer`, reporting progress in-app and via system notifications.
 - **Site Media Compatibility Bypass:** Per-site toggle in Privacy & Security controls for sites requiring relaxed compatibility handling.
 
 #### FR-4: Network & Tunnel (`WireGuard`, `Web Proxy`, `Encrypted DNS`)
@@ -61,7 +61,7 @@ Unlike bloated browsers or third-party wrapper tools, Volt Browser combines a lo
 
 #### FR-5: Security, Site Permissions & Data Controls
 - **HTTPS-Only Mode:** Opt-in toggle (off by default) that upgrades `http://` main-frame requests to `https://` and presents an actionable fallback warning page ("Continue anyway") if HTTPS fails.
-- **Per-Site Permissions:** Interactive prompt for Camera, Microphone, and Geolocation with *Allow once*, *Allow for this site*, and *Deny* options. Persistent grants are stored per `(host, permissionType)` and never auto-granted beyond the current session in Private Tabs.
+- **Per-Site Controls & Permissions:** Persists per-host JavaScript execution and Desktop Mode overrides in Room (`site_settings`), plus interactive prompts for Camera, Microphone, and Geolocation with *Allow once*, *Allow for this site*, and *Deny* options. Private Tabs additionally activate `WindowManager.LayoutParams.FLAG_SECURE` to prevent recents thumbnails or screen captures and never persist grants beyond the session.
 - **Lite Data Saver:** Skips remote image and font fetches while returning a `200 OK` `1x1` transparent GIF for images so page layouts stay intact.
 - **Exit & Erase:** Terminates all tabs, downloads, media playback, and tunnels; clears WebView caches, cookies, WebStorage, temporary files, and database traces.
 
@@ -86,12 +86,12 @@ Volt Browser follows a modular **MVVM** architecture with unidirectional `StateF
 
 | Package | Key Components | Responsibility |
 | :--- | :--- | :--- |
-| `com.example` | `VoltBrowserApp`, `MainActivity` | Application bootstrap, async Chromium warmup, edge-to-edge Activity host, PiP & intent handling |
-| `com.example.browser` | `VoltSpeedEngine`, `WebViewTabPool`, `VoltDataSaver`, `MediaSniffer`, `MediaSnifferCoordinator`, `PlaylistResolver`, `DeviceTraceCleaner` | WebView lifecycle & LRU pooling, UA/cache/dark-web config, Data Saver interception, JS bridge & media sniffing, trace erasure |
-| `com.example.data` | `AppDatabase`, `BrowserDaos`, `RoomEntities`, `BrowserRepository`, `VoltPreferences`, `SecureConfigCipher`, `BrowserModels` | Room SQLite persistence, Jetpack DataStore preferences, AES-256-GCM Keystore encryption, domain models |
-| `com.example.media` | `MediaPlaybackManager`, `VoltMediaService`, `MediaDownloader` | Media3 ExoPlayer playback, `MediaSessionService` foreground service, OkHttp + Media3 `Transformer` download pipeline |
+| `com.example` | `VoltBrowserApp`, `MainActivity` | Application bootstrap, async Chromium warmup, edge-to-edge Activity host, `FLAG_SECURE` Private-tab protection, PiP & intent handling |
+| `com.example.browser` | `VoltSpeedEngine`, `WebViewTabPool`, `WebContextTargetResolver`, `SocialHubHelper`, `VoltDataSaver`, `MediaSniffer`, `MediaSnifferCoordinator`, `PlaylistResolver`, `DeviceTraceCleaner` | WebView lifecycle & LRU pooling, UA/cache/dark-web/per-site config, Data Saver interception, JS bridge & media sniffing, social autofill helpers, trace erasure |
+| `com.example.data` | `AppDatabase`, `BrowserDaos`, `RoomEntities`, `BrowserRepository`, `VoltPreferences`, `SecureConfigCipher`, `BrowserModels` | Room SQLite persistence (`v3`), Jetpack DataStore preferences, AES-256-GCM Keystore encryption, domain models |
+| `com.example.media` | `MediaPlaybackManager`, `VoltMediaService`, `MediaDownloader`, `DataUrlDecoder`, `MediaExportHelper` | Media3 ExoPlayer playback, `MediaSessionService` foreground service, resumable OkHttp + Media3 `Transformer` download pipeline, MediaStore/SAF export |
 | `com.example.vpn` | `VpnProxyCoordinator`, `WireGuardManager`, `PublicRelayManager`, `VoltVpnService`, `VpnModels` | WireGuard `GoBackend` orchestration, Kill Switch enforcement, proxy relay discovery/probing, IPv4 DNS-to-DoH TUN codec |
-| `com.example.ui` | `BrowserViewModel`, `VoltBrowserScreen`, `ui/theme/*`, `ui/components/*`, `ui/screens/*` | Jetpack Compose Material 3 UI, state orchestration, adaptive layouts, gesture & sheet overlays |
+| `com.example.ui` | `BrowserViewModel`, `BrowserUiState`, `VoltBrowserScreen`, `BrowserNavigationRail`, `BrowserOverlays`, `ui/theme/*`, `ui/components/*`, `ui/screens/*` | Modular Jetpack Compose Material 3 UI, state orchestration, adaptive layouts, gesture & sheet overlays |
 
 ---
 
@@ -147,19 +147,20 @@ Configured via `gradle/libs.versions.toml` and `app/build.gradle.kts`:
   - Standard tabs check Room (`SitePermissionEntity`); Private tabs consult only ephemeral `sessionSitePermissions` and never persist grants.
 
 #### 2.3.3 Persistence Schema (`data/`)
-- **Room Database (`volt_browser.db`, Version 2, `MIGRATION_1_2`):**
+- **Room Database (`volt_browser.db`, Version 3, `MIGRATION_1_2` & `MIGRATION_2_3`):**
   - `bookmarks`: `id` (PK), `url`, `title`, `category`, `isSpeedDial`, `accentHex`, `createdAt`.
   - `history_entries`: `id` (PK), `url`, `title`, `visitedAt`, `loadTimeMs`, `trackersBlocked`.
   - `downloads`: `id` (PK), `url`, `fileName`, `localPath`, `mimeType`, `downloadedBytes`, `totalBytes`, `status`, `createdAt`.
   - `site_permissions`: composite PK `(host, permissionType)`, `granted`, `updatedAt`.
+  - `site_settings`: `host` (PK), `jsEnabled`, `desktopMode`, `updatedAt`.
 - **DataStore (`VoltPreferences`):**
   - Persists boolean feature flags, theme mode, search engine, DoH provider, proxy failover/launch flags, encrypted WireGuard configs, decrypt-failure flags, and cumulative session telemetry.
 
 #### 2.3.4 Media Playback & Download Pipeline (`media/`)
-- **Playback:** `MediaPlaybackManager` binds `ExoPlayer` configured with `OkHttpDataSource.Factory` (injecting per-stream `Referer`, `Origin`, and `User-Agent` from `MediaSniffer.registerPlaybackContext`), attaches to `VoltMediaService` (`foregroundServiceType="mediaPlayback"`), and notifies `MainActivity` for PiP eligibility.
+- **Playback:** `MediaPlaybackManager` binds `ExoPlayer` configured with `OkHttpDataSource.Factory` (injecting per-stream `Referer`, `Origin`, and `User-Agent` from `MediaSniffer.registerPlaybackContext`), attaches to `VoltMediaService` (`foregroundServiceType="mediaPlayback"`), and updates Android 12+ `PictureInPictureParams.setAutoEnterEnabled` in `MainActivity`.
 - **Downloading (`MediaDownloader`):**
-  - Standard HTTP/S assets stream directly via `okHttpClient` into app/public Downloads storage and register via `MediaStore`.
-  - `data:` URLs are base64/URL-decoded locally via `DecodedDataUrl`.
+  - Standard HTTP/S assets stream directly via `okHttpClient`, support HTTP `Range: bytes=<offset>-` `206 Partial Content` resume via `resumeOrRetryDownload`, and export via `MediaExportHelper` (`MediaStore` / SAF / `FileProvider`).
+  - `data:` URLs are base64/URL-decoded locally via `DataUrlDecoder`.
   - Adaptive HLS/DASH streams are transformed/remuxed to `.mp4` locally using Media3 `Transformer` + `ExoPlayerAssetLoader` with live progress tracking.
 
 #### 2.3.5 VPN, WireGuard, Proxy & DoH (`vpn/`)

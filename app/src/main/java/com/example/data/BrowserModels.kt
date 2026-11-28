@@ -154,6 +154,11 @@ enum class SitePermissionType(val label: String) {
   LOCATION("Location"),
 }
 
+data class SiteHostOverride(
+  val jsEnabled: Boolean? = null,
+  val desktopMode: Boolean? = null,
+)
+
 data class HttpsWarningState(
   val failedUrl: String,
   val fallbackHttpUrl: String,
@@ -175,6 +180,8 @@ data class BrowserTabState(
   val lastLoadTimeMs: Long? = null,
   val isSecure: Boolean = true,
   val isMediaCompatBypassEnabled: Boolean = false,
+  val siteJsEnabled: Boolean = true,
+  val siteDesktopOverride: Boolean? = null,
   val detectedMedia: List<DetectedMediaItem> = emptyList(),
   val isScanningMedia: Boolean = false,
   val isSpeedDial: Boolean = true,

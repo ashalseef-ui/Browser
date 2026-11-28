@@ -112,3 +112,24 @@ interface SitePermissionDao {
   @Query("DELETE FROM site_permissions")
   suspend fun clearAll()
 }
+
+@Dao
+interface SiteSettingDao {
+  @Query("SELECT * FROM site_settings ORDER BY updatedAt DESC")
+  fun observeAll(): Flow<List<SiteSettingEntity>>
+
+  @Query("SELECT * FROM site_settings")
+  suspend fun getAllSnapshot(): List<SiteSettingEntity>
+
+  @Query("SELECT * FROM site_settings WHERE host = :host LIMIT 1")
+  suspend fun getByHost(host: String): SiteSettingEntity?
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsert(entity: SiteSettingEntity)
+
+  @Query("DELETE FROM site_settings WHERE host = :host")
+  suspend fun deleteForHost(host: String)
+
+  @Query("DELETE FROM site_settings")
+  suspend fun clearAll()
+}

@@ -1,6 +1,6 @@
 package com.example.browser
 
-import android.net.Uri
+import androidx.core.net.toUri
 import com.example.data.BrowserTabState
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
@@ -179,7 +179,7 @@ class MediaSnifferCoordinator(
     val resolvedTitle =
       if (finalUrl != baseItem.url) {
         val segment =
-          runCatching { Uri.parse(finalUrl).lastPathSegment }.getOrNull()
+          runCatching { finalUrl.toUri().lastPathSegment }.getOrNull()
             ?.takeIf { it.isNotBlank() && it.length <= 72 && it.contains('.') }
         val genericTitles = setOf("Playlist / Media", "Resolved Video", "Web Video", "Captured Video", "")
         if (baseItem.title in genericTitles || !baseItem.title.contains('.')) {

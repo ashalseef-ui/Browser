@@ -857,4 +857,101 @@ class ExampleRobolectricTest {
     assertFalse(defaults.wireGuardKillSwitchEnabled)
     assertFalse(defaults.hasSeenPublicProxyWarning)
   }
+
+  @Test
+  fun `media downloader builds http range resume requests and parses content range totals`() {
+    val resumeReq =
+      MediaDownloader.buildResumeRequest(
+        url = "https://cdn.example.com/archive.zip",
+        referer = "https://example.com/files",
+        existingBytes = 4096L,
+      )
+    assertEquals("bytes=4096-", resumeReq.header("Range"))
+    assertEquals("https://example.com/files", resumeReq.header("Referer"))
+
+    val freshReq =
+      MediaDownloader.buildResumeRequest(
+        url = "https://cdn.example.com/archive.zip",
+        referer = null,
+        existingBytes = 0L,
+      )
+    assertNull(freshReq.header("Range"))
+
+    assertEquals(
+      10_000L,
+      MediaDownloader.parseContentRangeTotalBytes("bytes 4096-9999/10000", 4096L, 5904L),
+    )
+    assertEquals(
+      9_000L,
+      MediaDownloader.parseContentRangeTotalBytes("bytes 4096-8999/*", 4096L, 4904L),
+    )
+    assertEquals(
+      -1L,
+      MediaDownloader.parseContentRangeTotalBytes(null, 4096L, -1L),
+    )
+  }
+
+  @Test
+  fun `speed engine applies per-site javascript and desktop mode overrides cleanly`() {
+    val globalMobile =
+      com.example.data.BrowserSettings(
+        desktopModeEnabled = false,
+        liteModeEnabled = false,
+      )
+    val (jsBlocked, desktopPinned) =
+      VoltSpeedEngine.resolveEffectiveSiteSettings(
+        settings = globalMobile,
+        siteOverride = com.example.data.SiteHostOverride(jsEnabled = false, desktopMode = true),
+      )
+    assertFalse(jsBlocked)
+    assertTrue(desktopPinned)
+
+    val (jsDefault, desktopFromGlobal) =
+      VoltSpeedEngine.resolveEffectiveSiteSettings(
+        settings = globalMobile.copy(desktopModeEnabled = true),
+        siteOverride = null,
+      )
+    assertTrue(jsDefault)
+    assertTrue(desktopFromGlobal)
+
+    val sampleMobileUa =
+      "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36"
+    val desktopUa = VoltSpeedEngine.buildUserAgent(sampleMobileUa, desktopMode = true)
+    assertTrue(desktopUa.contains("X11; Linux x86_64"))
+    assertTrue(desktopUa.contains("Chrome/131.0.6778.39"))
+    assertEquals(sampleMobileUa, VoltSpeedEngine.buildUserAgent(sampleMobileUa, desktopMode = false))
+  }
+
+  @Test
+  fun `room app database persists and clears per-site settings`() =
+    kotlinx.coroutines.runBlocking {
+      val context = ApplicationProvider.getApplicationContext<Context>()
+      val db =
+        androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.data.AppDatabase::class.java,
+          )
+          .allowMainThreadQueries()
+          .build()
+      try {
+        val dao = db.siteSettingDao()
+        dao.upsert(
+          com.example.data.SiteSettingEntity(
+            host = "news.example.com",
+            jsEnabled = false,
+            desktopMode = true,
+            updatedAt = 123456L,
+          )
+        )
+        val loaded = dao.getByHost("news.example.com")
+        assertNotNull(loaded)
+        assertEquals(false, loaded!!.jsEnabled)
+        assertEquals(true, loaded.desktopMode)
+
+        dao.deleteForHost("news.example.com")
+        assertNull(dao.getByHost("news.example.com"))
+      } finally {
+        db.close()
+      }
+    }
 }

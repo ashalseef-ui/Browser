@@ -151,13 +151,24 @@ class VoltSpeedEngine(private val context: Context) {
 
   private val defaultUserAgent: String by lazy { WebSettings.getDefaultUserAgent(context) }
 
+  /**
+   * Configures WebView rendering, cache isolation, User-Agent, and content security settings,
+   * applying per-host overrides (JavaScript / Desktop Mode) over global preferences when present.
+   */
   @SuppressLint("SetJavaScriptEnabled")
-  fun configureWebViewSettings(webView: WebView, settings: BrowserSettings, isIncognito: Boolean = false) {
+  fun configureWebViewSettings(
+    webView: WebView,
+    settings: BrowserSettings,
+    isIncognito: Boolean = false,
+    siteOverride: com.example.data.SiteHostOverride? = null,
+  ) {
     webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
     webView.isScrollbarFadingEnabled = true
 
+    val (effectiveJs, effectiveDesktop) = resolveEffectiveSiteSettings(settings, siteOverride)
+
     val ws = webView.settings
-    ws.javaScriptEnabled = true
+    ws.javaScriptEnabled = effectiveJs
     ws.domStorageEnabled = true
     ws.databaseEnabled = false
     @Suppress("DEPRECATION")
@@ -177,13 +188,7 @@ class VoltSpeedEngine(private val context: Context) {
     ws.loadsImagesAutomatically = !settings.liteModeEnabled
     ws.blockNetworkImage = settings.liteModeEnabled
 
-    val chromeVer = Regex("Chrome/([\\d\\.]+)").find(defaultUserAgent)?.groupValues?.getOrNull(1) ?: "126.0.0.0"
-    ws.userAgentString =
-      if (settings.desktopModeEnabled) {
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVer Safari/537.36"
-      } else {
-        defaultUserAgent
-      }
+    ws.userAgentString = buildUserAgent(defaultUserAgent, effectiveDesktop)
 
     if (WebViewFeature.isFeatureSupported(WebViewFeature.OFF_SCREEN_PRERASTER)) {
       WebSettingsCompat.setOffscreenPreRaster(ws, true)
@@ -225,6 +230,24 @@ class VoltSpeedEngine(private val context: Context) {
 
   companion object {
     private const val MAX_PREWARMED_HOSTS = 256
+
+    /** Resolves `(effectiveJs, effectiveDesktop)` from global [settings] and optional [siteOverride]. */
+    fun resolveEffectiveSiteSettings(
+      settings: BrowserSettings,
+      siteOverride: com.example.data.SiteHostOverride?,
+    ): Pair<Boolean, Boolean> {
+      val effectiveJs = siteOverride?.jsEnabled ?: true
+      val effectiveDesktop = siteOverride?.desktopMode ?: settings.desktopModeEnabled
+      return effectiveJs to effectiveDesktop
+    }
+
+    /** Builds either the mobile default UA or a Linux x86_64 desktop UA preserving Chromium version. */
+    fun buildUserAgent(defaultUserAgent: String, desktopMode: Boolean): String {
+      if (!desktopMode) return defaultUserAgent
+      val chromeVer =
+        Regex("Chrome/([\\d\\.]+)").find(defaultUserAgent)?.groupValues?.getOrNull(1) ?: "126.0.0.0"
+      return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVer Safari/537.36"
+    }
 
     fun isValidPrewarmHost(host: String): Boolean {
       if (host.isBlank() || host.length > 253) return false

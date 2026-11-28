@@ -27,8 +27,10 @@ import androidx.webkit.WebViewFeature
 import com.example.data.BrowserSettings
 import com.example.data.DetectedMediaItem
 import com.example.data.MediaKind
+import com.example.data.SiteHostOverride
 import com.example.data.SitePermissionEntity
 import com.example.data.SitePermissionType
+import com.example.data.SiteSettingEntity
 import com.example.data.WebContextMenuTarget
 import java.io.ByteArrayInputStream
 import java.util.Locale
@@ -38,6 +40,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+/**
+ * Event callbacks emitted by pooled WebViews back to BrowserViewModel on main/UI state boundaries.
+ */
 interface TabWebCallbacks {
   fun onPageStarted(tabId: String, url: String)
   fun onPageFinished(tabId: String, url: String, title: String, loadTimeMs: Long, canGoBack: Boolean, canGoForward: Boolean)
@@ -67,6 +72,11 @@ interface TabWebCallbacks {
   fun onContextMenuRequested(tabId: String, target: WebContextMenuTarget)
 }
 
+/**
+ * Manages a bounded LRU pool of WebViews across Standard and Private tabs, enforcing
+ * MultiProfile cookie isolation, HTTPS-Only upgrades, Kill Switch blocking, per-site
+ * permissions/settings, and hardened WebMessageListener media sniffing.
+ */
 class WebViewTabPool(
   private val context: Context,
   private val speedEngine: VoltSpeedEngine,
@@ -75,7 +85,8 @@ class WebViewTabPool(
   private data class AppliedWebSettings(
     val liteModeEnabled: Boolean,
     val darkWebEnabled: Boolean,
-    val desktopModeEnabled: Boolean,
+    val effectiveDesktopMode: Boolean,
+    val effectiveJsEnabled: Boolean,
   )
 
   private val webViews = LinkedHashMap<String, WebView>(8, 0.75f, true)
@@ -91,6 +102,7 @@ class WebViewTabPool(
   private val publicProxyHttpBypassHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
   private val persistedSitePermissions = ConcurrentHashMap<String, Boolean>()
   private val sessionSitePermissions = ConcurrentHashMap<String, Boolean>()
+  private val siteHostOverrides = ConcurrentHashMap<String, SiteHostOverride>()
 
   @Volatile var currentSettings: BrowserSettings = BrowserSettings()
   @Volatile var isKillSwitchBlocking: Boolean = false
@@ -98,12 +110,33 @@ class WebViewTabPool(
   var proxyCredentialsProvider: (() -> Pair<String, String>?)? = null
   var isPublicRelayActiveProvider: (() -> Boolean)? = null
 
-  private fun BrowserSettings.toAppliedWebSettings(): AppliedWebSettings =
+  private fun resolveAppliedWebSettings(
+    settings: BrowserSettings,
+    siteOverride: SiteHostOverride?,
+  ): AppliedWebSettings =
     AppliedWebSettings(
-      liteModeEnabled = liteModeEnabled,
-      darkWebEnabled = darkWebEnabled,
-      desktopModeEnabled = desktopModeEnabled,
+      liteModeEnabled = settings.liteModeEnabled,
+      darkWebEnabled = settings.darkWebEnabled,
+      effectiveDesktopMode = siteOverride?.desktopMode ?: settings.desktopModeEnabled,
+      effectiveJsEnabled = siteOverride?.jsEnabled ?: true,
     )
+
+  fun getSiteOverrideForUrl(urlOrHost: String?): SiteHostOverride? {
+    val key = normalizeHostKey(urlOrHost)
+    if (key.isEmpty()) return null
+    return siteHostOverrides[key]
+  }
+
+  fun syncSiteHostOverrides(entities: List<SiteSettingEntity>) {
+    siteHostOverrides.clear()
+    entities.forEach { entity ->
+      if (entity.host.isNotBlank()) {
+        siteHostOverrides[entity.host] =
+          SiteHostOverride(jsEnabled = entity.jsEnabled, desktopMode = entity.desktopMode)
+      }
+    }
+    refreshSettings(currentSettings)
+  }
 
   fun syncPersistedSitePermissions(entities: List<SitePermissionEntity>) {
     persistedSitePermissions.clear()
@@ -155,9 +188,15 @@ class WebViewTabPool(
     fallbackUrl: String? = null,
   ): WebView {
     webViews[tabId]?.let { existing ->
-      val target = currentSettings.toAppliedWebSettings()
+      val override = getSiteOverrideForUrl(currentUrls[tabId] ?: fallbackUrl)
+      val target = resolveAppliedWebSettings(currentSettings, override)
       if (appliedWebSettings[tabId] != target) {
-        speedEngine.configureWebViewSettings(existing, currentSettings, isIncognito = isIncognito)
+        speedEngine.configureWebViewSettings(
+          existing,
+          currentSettings,
+          isIncognito = isIncognito,
+          siteOverride = override,
+        )
         appliedWebSettings[tabId] = target
       }
       return existing
@@ -193,7 +232,13 @@ class WebViewTabPool(
       CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
     }
 
-    speedEngine.configureWebViewSettings(webView, currentSettings, isIncognito = isIncognito)
+    val initialOverride = getSiteOverrideForUrl(fallbackUrl)
+    speedEngine.configureWebViewSettings(
+      webView,
+      currentSettings,
+      isIncognito = isIncognito,
+      siteOverride = initialOverride,
+    )
     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
       webView.importantForAutofill =
         if (isIncognito) View.IMPORTANT_FOR_AUTOFILL_NO
@@ -335,6 +380,17 @@ class WebViewTabPool(
           val resolvedUrl = url.orEmpty()
           currentUrls[tabId] = resolvedUrl
           pageStartTimestamps[tabId] = System.currentTimeMillis()
+          val override = getSiteOverrideForUrl(resolvedUrl)
+          val target = resolveAppliedWebSettings(currentSettings, override)
+          if (view != null && appliedWebSettings[tabId] != target) {
+            speedEngine.configureWebViewSettings(
+              view,
+              currentSettings,
+              isIncognito = isIncognito || tabId in incognitoTabIds,
+              siteOverride = override,
+            )
+            appliedWebSettings[tabId] = target
+          }
           callbacks.onPageStarted(tabId, resolvedUrl)
         }
 
@@ -693,7 +749,7 @@ class WebViewTabPool(
     }
 
     webViews[tabId] = webView
-    appliedWebSettings[tabId] = currentSettings.toAppliedWebSettings()
+    appliedWebSettings[tabId] = resolveAppliedWebSettings(currentSettings, initialOverride)
 
     val savedBundle = savedStateBundles.remove(tabId)
     val restored = if (savedBundle != null) webView.restoreState(savedBundle) != null else false
@@ -749,13 +805,15 @@ class WebViewTabPool(
 
   fun refreshSettings(settings: BrowserSettings) {
     currentSettings = settings
-    val target = settings.toAppliedWebSettings()
     webViews.forEach { (tabId, wv) ->
+      val override = getSiteOverrideForUrl(currentUrls[tabId])
+      val target = resolveAppliedWebSettings(settings, override)
       if (appliedWebSettings[tabId] != target) {
         speedEngine.configureWebViewSettings(
           wv,
           settings,
           isIncognito = tabId in incognitoTabIds,
+          siteOverride = override,
         )
         appliedWebSettings[tabId] = target
       }
@@ -889,14 +947,8 @@ class WebViewTabPool(
 
     private val mediaCompatBypassHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    fun normalizeHostKey(urlOrHost: String?): String {
-      val raw = urlOrHost?.trim().orEmpty()
-      if (raw.isEmpty()) return ""
-      val host =
-        if (raw.contains("://")) runCatching { Uri.parse(raw).host }.getOrNull().orEmpty()
-        else raw.substringBefore('/').substringBefore(':')
-      return host.lowercase(Locale.US).removePrefix("www.")
-    }
+    fun normalizeHostKey(urlOrHost: String?): String =
+      WebContextTargetResolver.normalizeHostKey(urlOrHost)
 
     fun setHostMediaCompatBypass(urlOrHost: String?, enabled: Boolean) {
       val key = normalizeHostKey(urlOrHost)
@@ -911,105 +963,22 @@ class WebViewTabPool(
     }
 
     fun upgradeHttpToHttps(url: String): String =
-      if (url.startsWith("http://", ignoreCase = true)) {
-        "https://" + url.substring(7)
-      } else {
-        url
-      }
+      WebContextTargetResolver.upgradeHttpToHttps(url)
 
     fun clearMediaCompatBypassHosts() {
       mediaCompatBypassHosts.clear()
     }
 
-    fun shouldProvideProxyCredentials(challengeHost: String?, activeProxyHost: String?): Boolean {
-      val challenge = challengeHost?.trim().orEmpty()
-      val proxy = activeProxyHost?.trim().orEmpty()
-      return challenge.isNotEmpty() && proxy.isNotEmpty() && challenge.equals(proxy, ignoreCase = true)
-    }
+    fun shouldProvideProxyCredentials(challengeHost: String?, activeProxyHost: String?): Boolean =
+      WebContextTargetResolver.shouldProvideProxyCredentials(challengeHost, activeProxyHost)
 
     fun resolveContextTarget(
       pageUrl: String,
       hitType: Int,
       hitExtra: String?,
       domTarget: WebContextMenuTarget?,
-    ): WebContextMenuTarget? {
-      if (hitType == WebView.HitTestResult.EDIT_TEXT_TYPE) return null
-
-      var linkUrl = domTarget?.linkUrl?.takeIf { isSupportedContextUrl(it) }
-      val linkText = domTarget?.linkText?.takeIf { it.isNotBlank() }
-      var imageUrl = domTarget?.imageUrl?.takeIf { isSupportedContextUrl(it) }
-      var mediaUrl = domTarget?.mediaUrl?.takeIf { isSupportedContextUrl(it) }
-      var mediaTitle = domTarget?.mediaTitle?.takeIf { it.isNotBlank() }
-
-      val cleanedExtra = hitExtra?.trim()?.takeIf { it.isNotBlank() }
-      when (hitType) {
-        WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
-          if (cleanedExtra != null && isSupportedContextUrl(cleanedExtra)) {
-            linkUrl = cleanedExtra
-          }
-        }
-        WebView.HitTestResult.IMAGE_TYPE -> {
-          if (cleanedExtra != null && isSupportedContextUrl(cleanedExtra)) {
-            imageUrl = cleanedExtra
-          }
-        }
-        WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
-          if (cleanedExtra != null && isSupportedContextUrl(cleanedExtra)) {
-            imageUrl = cleanedExtra
-          }
-        }
-        WebView.HitTestResult.EMAIL_TYPE -> {
-          if (cleanedExtra != null) {
-            linkUrl = if (cleanedExtra.startsWith("mailto:", true)) cleanedExtra else "mailto:$cleanedExtra"
-          }
-        }
-        WebView.HitTestResult.PHONE_TYPE -> {
-          if (cleanedExtra != null) {
-            linkUrl = if (cleanedExtra.startsWith("tel:", true)) cleanedExtra else "tel:$cleanedExtra"
-          }
-        }
-        WebView.HitTestResult.GEO_TYPE -> {
-          if (cleanedExtra != null) {
-            linkUrl = if (cleanedExtra.startsWith("geo:", true)) cleanedExtra else "geo:0,0?q=$cleanedExtra"
-          }
-        }
-      }
-
-      var mediaKind: MediaKind? = null
-      if (mediaUrl != null) {
-        mediaKind = MediaSniffer.classifyUrl(mediaUrl, pageUrl, mediaTitle.orEmpty())?.kind ?: MediaKind.VIDEO
-      } else if (linkUrl != null) {
-        val classifiedLink = MediaSniffer.classifyUrl(linkUrl, pageUrl, linkText.orEmpty())
-        if (classifiedLink != null) {
-          mediaUrl = linkUrl
-          mediaKind = classifiedLink.kind
-          if (mediaTitle.isNullOrBlank()) {
-            mediaTitle = classifiedLink.title
-          }
-        }
-      }
-
-      val resolved =
-        WebContextMenuTarget(
-          pageUrl = pageUrl,
-          linkUrl = linkUrl,
-          linkText = linkText,
-          imageUrl = imageUrl,
-          mediaUrl = mediaUrl,
-          mediaKind = mediaKind,
-          mediaTitle = mediaTitle,
-        )
-      return resolved.takeIf { it.hasAnyTarget }
-    }
-
-    private fun isSupportedContextUrl(url: String): Boolean {
-      val low = url.trim().lowercase(Locale.US)
-      return low.startsWith("http://") ||
-        low.startsWith("https://") ||
-        low.startsWith("mailto:") ||
-        low.startsWith("tel:") ||
-        low.startsWith("geo:")
-    }
+    ): WebContextMenuTarget? =
+      WebContextTargetResolver.resolveContextTarget(pageUrl, hitType, hitExtra, domTarget)
 
     private val NON_VIDEO_EXTENSIONS =
       setOf(

@@ -2,7 +2,7 @@ package com.example.media
 
 import android.content.ComponentName
 import android.content.Context
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -144,7 +144,7 @@ class MediaPlaybackManager(
       MediaMetadata.Builder()
         .setTitle(item.title)
         .setSubtitle(item.sourcePageUrl)
-        .apply { item.posterUrl?.let { setArtworkUri(Uri.parse(it)) } }
+        .apply { item.posterUrl?.let { setArtworkUri(it.toUri()) } }
         .build()
 
     val mediaItem =

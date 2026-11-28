@@ -404,47 +404,47 @@ class PublicRelayManager {
   }
 
   fun applyWebViewProxy(relay: PublicRelayNode, onApplied: (Boolean) -> Unit) {
-    if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-      onApplied(false)
-      return
-    }
-    val rule =
-      if (relay.protocol.equals("SOCKS5", ignoreCase = true)) {
-        "socks5://${relay.ip}:${relay.port}"
-      } else {
-        "http://${relay.ip}:${relay.port}"
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+      val rule =
+        if (relay.protocol.equals("SOCKS5", ignoreCase = true)) {
+          "socks5://${relay.ip}:${relay.port}"
+        } else {
+          "http://${relay.ip}:${relay.port}"
+        }
+      val config =
+        ProxyConfig.Builder()
+          .addProxyRule(rule)
+          .addBypassRule("<-loopback>")
+          .build()
+      ProxyController.getInstance().setProxyOverride(config, proxyExecutor) {
+        onApplied(true)
       }
-    val config =
-      ProxyConfig.Builder()
-        .addProxyRule(rule)
-        .addBypassRule("<-loopback>")
-        .build()
-    ProxyController.getInstance().setProxyOverride(config, proxyExecutor) {
-      onApplied(true)
+    } else {
+      onApplied(false)
     }
   }
 
   fun clearWebViewProxy(onCleared: () -> Unit) {
-    if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-      onCleared()
-      return
-    }
-    ProxyController.getInstance().clearProxyOverride(proxyExecutor) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+      ProxyController.getInstance().clearProxyOverride(proxyExecutor) {
+        onCleared()
+      }
+    } else {
       onCleared()
     }
   }
 
   fun applyKillSwitchDeadProxy(onApplied: (Boolean) -> Unit = {}) {
-    if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+      val config =
+        ProxyConfig.Builder()
+          .addProxyRule("http://127.0.0.1:9")
+          .build()
+      ProxyController.getInstance().setProxyOverride(config, proxyExecutor) {
+        onApplied(true)
+      }
+    } else {
       onApplied(false)
-      return
-    }
-    val config =
-      ProxyConfig.Builder()
-        .addProxyRule("http://127.0.0.1:9")
-        .build()
-    ProxyController.getInstance().setProxyOverride(config, proxyExecutor) {
-      onApplied(true)
     }
   }
 

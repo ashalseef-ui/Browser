@@ -11,16 +11,17 @@ import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.VoltBrowserApp
 import com.example.browser.DeviceTraceCleaner
 import com.example.browser.MediaSniffer
 import com.example.browser.MediaSnifferCoordinator
+import com.example.browser.SocialHubHelper
 import com.example.browser.TabWebCallbacks
 import com.example.browser.VoltSpeedEngine
 import com.example.browser.WebViewTabPool
-
 import com.example.data.AppThemeMode
 import com.example.data.BookmarkEntity
 import com.example.data.BrowserSettings
@@ -60,31 +61,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class BrowserSheet {
-  NONE,
-  TAB_SWITCHER,
-  MEDIA_HUB,
-  SECURITY_TELEMETRY,
-  LIBRARY_SETTINGS,
-  ADD_SPEED_DIAL,
-  VPN,
-  EXIT_CONFIRM,
-}
-
-data class SitePermissionPromptState(
-  val tabId: String,
-  val origin: String,
-  val host: String,
-  val isIncognito: Boolean,
-  val requestedTypes: Set<SitePermissionType>,
-  val onDecision: (granted: Boolean, rememberForSite: Boolean) -> Unit,
-)
-
-data class RuntimePermissionRequestState(
-  val permissions: List<String>,
-  val onResult: (Boolean) -> Unit,
-)
-
+/**
+ * Primary MVVM state holder coordinating browser tabs, WebView pool lifecycle,
+ * per-site security/render overrides, Media3 playback/downloads, and VPN/proxy tunnels.
+ */
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
 
   private val app = application as VoltBrowserApp
@@ -206,6 +186,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       override fun onPageStarted(tabId: String, url: String) {
         mediaSnifferCoordinator.resetTab(tabId)
         val isBypassed = WebViewTabPool.isHostMediaCompatBypassed(url)
+        val siteOverride = webViewPool.getSiteOverrideForUrl(url)
         updateTab(tabId) {
           it.copy(
             url = url,
@@ -214,6 +195,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isSpeedDial = false,
             isSecure = url.startsWith("https://", ignoreCase = true),
             isMediaCompatBypassEnabled = isBypassed,
+            siteJsEnabled = siteOverride?.jsEnabled ?: true,
+            siteDesktopOverride = siteOverride?.desktopMode,
             trackersBlockedOnPage = 0,
             bytesSavedOnPage = 0L,
             detectedMedia = emptyList(),
@@ -234,6 +217,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         var blockedCount = 0
         var bytesSaved = 0L
         val isBypassed = WebViewTabPool.isHostMediaCompatBypassed(url)
+        val siteOverride = webViewPool.getSiteOverrideForUrl(url)
 
         updateTab(tabId) { tab ->
           blockedCount = tab.trackersBlockedOnPage
@@ -249,6 +233,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             isSpeedDial = false,
             isSecure = url.startsWith("https://", ignoreCase = true),
             isMediaCompatBypassEnabled = isBypassed,
+            siteJsEnabled = siteOverride?.jsEnabled ?: true,
+            siteDesktopOverride = siteOverride?.desktopMode,
           )
         }
 
@@ -499,6 +485,26 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         webViewPool.syncPersistedSitePermissions(entities)
       }
     }
+    viewModelScope.launch {
+      repository.siteSettings.collect { entities ->
+        webViewPool.syncSiteHostOverrides(entities)
+        val overridesByHost = entities.associateBy { it.host }
+        _tabs.update { list ->
+          list.map { tab ->
+            if (tab.isSpeedDial || tab.url.isBlank()) {
+              tab
+            } else {
+              val host = WebViewTabPool.normalizeHostKey(tab.url)
+              val override = overridesByHost[host]
+              tab.copy(
+                siteJsEnabled = override?.jsEnabled ?: true,
+                siteDesktopOverride = override?.desktopMode,
+              )
+            }
+          }
+        }
+      }
+    }
     mediaManager.connect()
   }
 
@@ -565,8 +571,74 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
     showMessage(
       if (nextEnabled) "Media Compatibility Bypass ON for $host"
-      else "Standard Shield restored for $host"
+      else "Standard optimization restored for $host"
     )
+  }
+
+  /** Toggles per-site JavaScript execution for the active tab's host and reloads. */
+  fun toggleCurrentSiteJs() {
+    val current = activeTab.value
+    if (current.isSpeedDial || current.url.isBlank()) {
+      showMessage("Open a website first to change site JavaScript setting")
+      return
+    }
+    val host = WebViewTabPool.normalizeHostKey(current.url)
+    if (host.isEmpty()) return
+    val nextJs = !current.siteJsEnabled
+    val persistedJs: Boolean? = if (nextJs) null else false
+    updateTab(current.id) { it.copy(siteJsEnabled = nextJs) }
+    viewModelScope.launch {
+      repository.saveSiteJsOverride(host, persistedJs)
+      webViewPool.findWebView(current.id)?.reload()
+    }
+    showMessage(
+      if (nextJs) "JavaScript enabled for $host" else "JavaScript blocked for $host"
+    )
+  }
+
+  /** Toggles per-site Desktop Mode for the active tab's host and reloads. */
+  fun toggleCurrentSiteDesktop() {
+    val current = activeTab.value
+    if (current.isSpeedDial || current.url.isBlank()) {
+      showMessage("Open a website first to change site Desktop Mode")
+      return
+    }
+    val host = WebViewTabPool.normalizeHostKey(current.url)
+    if (host.isEmpty()) return
+    val currentlyDesktop = current.siteDesktopOverride ?: settings.value.desktopModeEnabled
+    val nextDesktop = !currentlyDesktop
+    val overrideValue: Boolean? =
+      if (nextDesktop == settings.value.desktopModeEnabled) null else nextDesktop
+    updateTab(current.id) { it.copy(siteDesktopOverride = overrideValue) }
+    viewModelScope.launch {
+      repository.saveSiteDesktopOverride(host, overrideValue)
+      webViewPool.findWebView(current.id)?.reload()
+    }
+    showMessage(
+      if (nextDesktop) "Desktop view enabled for $host" else "Mobile view enabled for $host"
+    )
+  }
+
+  /** Clears per-site JS, Desktop Mode, Media Bypass, and permission decisions for the active host. */
+  fun resetCurrentSiteSettings() {
+    val current = activeTab.value
+    if (current.isSpeedDial || current.url.isBlank()) return
+    val host = WebViewTabPool.normalizeHostKey(current.url)
+    if (host.isEmpty()) return
+    WebViewTabPool.setHostMediaCompatBypass(current.url, false)
+    updateTab(current.id) {
+      it.copy(
+        isMediaCompatBypassEnabled = false,
+        siteJsEnabled = true,
+        siteDesktopOverride = null,
+      )
+    }
+    viewModelScope.launch {
+      repository.clearSiteSettingsForHost(host)
+      repository.clearSitePermissionsForHost(host)
+      webViewPool.findWebView(current.id)?.reload()
+    }
+    showMessage("Site settings & permissions reset for $host")
   }
 
   @Suppress("UNUSED_PARAMETER")
@@ -879,7 +951,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val targetUri: Uri
     var grantRead = false
     if (rawUrl.startsWith("file://")) {
-      val path = Uri.parse(rawUrl).path
+      val path = rawUrl.toUri().path
       val file = path?.let { File(it) }
       if (file == null || !file.exists()) {
         showMessage("Local file is no longer available")
@@ -888,7 +960,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
       targetUri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
       grantRead = true
     } else {
-      targetUri = Uri.parse(rawUrl)
+      targetUri = rawUrl.toUri()
       grantRead = rawUrl.startsWith("content://")
     }
 
@@ -1095,19 +1167,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     showMessage("Download cancelled")
   }
 
+  /** Resumes a paused/failed HTTP download via HTTP Range when partial bytes exist, or retries cleanly. */
   fun retryDownload(item: DownloadItemEntity) {
     viewModelScope.launch {
       if (item.url.startsWith("data:", ignoreCase = true) && MediaDownloader.parseDataUrl(item.url) == null) {
         showMessage("Blob/data download expired — please trigger it from the webpage again")
         return@launch
       }
-      repository.deleteDownload(item.id)
-      downloadMedia(
-        url = item.url,
-        fileName = item.fileName,
-        mimeType = item.mimeType,
-        referer = activeTab.value.url.takeIf { it.startsWith("http") },
-      )
+      val referer = activeTab.value.url.takeIf { it.startsWith("http") }
+      mediaDownloader.resumeOrRetryDownload(item, referer)
+      showMessage("Resuming download...")
     }
   }
 
@@ -1397,49 +1466,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun refreshSocialAppStates() {
-    val pm = app.packageManager
-    val igInstalled = isPackageInstalled(pm, "com.instagram.android")
-    val fbInstalled = isPackageInstalled(pm, "com.facebook.katana")
-    _socialApps.value =
-      listOf(
-        SocialAppShortcut(
-          id = "instagram",
-          name = "Instagram",
-          packageName = "com.instagram.android",
-          webUrl = "https://www.instagram.com/",
-          loginUrl = "https://www.instagram.com/accounts/login/",
-          isInstalled = igInstalled,
-        ),
-        SocialAppShortcut(
-          id = "facebook",
-          name = "Facebook",
-          packageName = "com.facebook.katana",
-          webUrl = "https://www.facebook.com/",
-          loginUrl = "https://www.facebook.com/login/",
-          isInstalled = fbInstalled,
-        ),
-      )
-    _hasSystemAutofill.value =
-      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-        runCatching {
-          val manager = app.getSystemService(android.view.autofill.AutofillManager::class.java)
-          manager != null && manager.isEnabled && manager.hasEnabledAutofillServices()
-        }.getOrDefault(false)
-      } else {
-        false
-      }
-  }
-
-  private fun isPackageInstalled(pm: android.content.pm.PackageManager, packageName: String): Boolean {
-    return runCatching {
-      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-        pm.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
-      } else {
-        @Suppress("DEPRECATION")
-        pm.getPackageInfo(packageName, 0)
-      }
-      true
-    }.getOrDefault(false)
+    _socialApps.value = SocialHubHelper.buildShortcuts(app)
+    _hasSystemAutofill.value = SocialHubHelper.isAutofillEnabled(app)
   }
 
   fun toggleSocialSidebar() {
@@ -1489,28 +1517,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun openDeviceAutofillSettings() {
-    val opened =
-      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-        runCatching {
-          val intent =
-            Intent(android.provider.Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).apply {
-              data = Uri.parse("package:${app.packageName}")
-              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-          app.startActivity(intent)
-          true
-        }.getOrDefault(false)
-      } else {
-        false
-      }
-    if (!opened) {
-      runCatching {
-        app.startActivity(
-          Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-      }.onFailure {
-        showMessage("Open Android Settings > Passwords & accounts to enable Autofill")
-      }
+    if (!SocialHubHelper.openAutofillSettings(app)) {
+      showMessage("Open Android Settings > Passwords & accounts to enable Autofill")
     }
   }
 

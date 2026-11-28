@@ -50,9 +50,7 @@ object DeviceTraceCleaner {
     deleteDirectoryContents(context.filesDir, excludedNames = setOf("datastore"))
 
     // 5. Chromium / WebView internal directories & leftover shared_prefs XMLs
-    val appDataDir: File? =
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) context.dataDir
-      else context.filesDir.parentFile
+    val appDataDir: File? = context.dataDir
 
     if (appDataDir != null && appDataDir.exists()) {
       deleteDirectoryRecursively(File(appDataDir, "app_webview"))

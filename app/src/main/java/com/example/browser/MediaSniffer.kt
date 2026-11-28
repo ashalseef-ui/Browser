@@ -1,6 +1,6 @@
 package com.example.browser
 
-import android.net.Uri
+import androidx.core.net.toUri
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import com.example.data.DetectedMediaItem
@@ -27,7 +27,7 @@ object MediaSniffer {
 
   fun classifyUrl(url: String, pageUrl: String, pageTitle: String): DetectedMediaItem? {
     if (url.isBlank() || url.startsWith("data:") || url.startsWith("blob:")) return null
-    val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+    val parsed = runCatching { url.toUri() }.getOrNull() ?: return null
     val scheme = parsed.scheme?.lowercase(Locale.US)
     if (scheme != "http" && scheme != "https") return null
 

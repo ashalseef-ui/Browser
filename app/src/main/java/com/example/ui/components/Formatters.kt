@@ -1,8 +1,9 @@
 package com.example.ui.components
 
-import android.net.Uri
+import androidx.core.net.toUri
 import java.util.Locale
 
+/** Formats a byte count into human-readable KB / MB / GB strings. */
 fun formatBytes(bytes: Long): String {
   if (bytes <= 0L) return "0 KB"
   val kb = bytes / 1024.0
@@ -13,6 +14,7 @@ fun formatBytes(bytes: Long): String {
   return String.format(Locale.US, "%.2f GB", gb)
 }
 
+/** Compact byte formatter used in status pills and navigation badges. */
 fun formatCompactDataCounter(bytes: Long): String {
   val safe = bytes.coerceAtLeast(0L)
   if (safe < 1024L) return "${safe}B"
@@ -25,6 +27,7 @@ fun formatCompactDataCounter(bytes: Long): String {
   return String.format(Locale.US, "%.1fG", gb)
 }
 
+/** Formats milliseconds into `mm:ss` or `h:mm:ss` playback duration labels. */
 fun formatDurationMs(ms: Long): String {
   val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
   val hours = totalSeconds / 3600L
@@ -37,7 +40,8 @@ fun formatDurationMs(ms: Long): String {
   }
 }
 
+/** Extracts the display host from [url], returning `"Speed Dial"` for blank URLs. */
 fun extractHost(url: String): String {
   if (url.isBlank()) return "Speed Dial"
-  return runCatching { Uri.parse(url).host?.removePrefix("www.") ?: url }.getOrDefault(url)
+  return runCatching { url.toUri().host?.removePrefix("www.") ?: url }.getOrDefault(url)
 }

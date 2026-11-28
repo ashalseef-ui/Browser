@@ -1,15 +1,5 @@
 <resources>
     <string name="app_name">Volt Browser</string>
-    <string name="omnibox_placeholder">Search or enter web address</string>
-    <string name="speed_dial_title">Speed Dial</string>
-    <string name="privacy_shield_label">Privacy Guard</string>
-    <string name="media_vault_title">Media Studio</string>
-    <string name="vpn_title">Network &amp; Tunnel</string>
-    <string name="tabs_title">Tab Deck</string>
-    <string name="bookmarks_title">Bookmarks</string>
-    <string name="history_title">History</string>
-    <string name="downloads_title">Downloads</string>
-    <string name="settings_title">Engine &amp; Appearance</string>
     <string name="new_tab">New Tab</string>
     <string name="new_private_tab">Private Tab</string>
     <string name="close_tab">Close tab</string>
@@ -23,23 +13,16 @@
     <string name="cd_media_detected">Open Media Studio</string>
     <string name="cd_security_shield">Connection security and privacy controls</string>
     <string name="cd_vpn_status">Network tunnel, proxy, and DNS controls</string>
-    <string name="cd_bookmark">Toggle bookmark</string>
-    <string name="cd_share">Share page</string>
     <string name="cd_pip">Picture in Picture</string>
     <string name="cd_play_pause">Play or pause</string>
     <string name="cd_seek_back">Rewind 10 seconds</string>
     <string name="cd_seek_forward">Forward 10 seconds</string>
-    <string name="cd_fullscreen">Toggle fullscreen</string>
     <string name="cd_download_media">Download media</string>
     <string name="cd_close_player">Close player</string>
     <string name="cd_background_audio">Minimize to background audio bar</string>
     <string name="cd_exit">Exit and erase all data</string>
     <string name="cd_search_engine_selector">Active search engine %1$s. Tap to choose or swipe to switch.</string>
     <string name="cd_omnibox_go">Search or go to address</string>
-    <string name="cd_paste_and_go">Paste from clipboard and go</string>
     <string name="cd_gesture_back">Swipe back gesture</string>
     <string name="cd_gesture_forward">Swipe forward gesture</string>
-    <string name="cd_site_bypass">Toggle site media compatibility bypass</string>
-    <string name="exit_erase_title">Exit &amp; Erase Everything?</string>
-    <string name="exit_erase_message">This closes all tabs, stops downloads, media playback, and proxy/VPN tunnels, and erases all browser caches, cookies, WebView storage, temporary files, and app data on this device.</string>
 </resources>
