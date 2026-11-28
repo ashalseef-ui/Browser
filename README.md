@@ -4,7 +4,7 @@ Volt Browser is a privacy-focused Android web browser built with Kotlin and Jetp
 
 ## Implemented Features
 - **Multi-Tab WebView Pool & Private Tab Protection**: Fast tab switching, isolated private/incognito sessions (`LOAD_NO_CACHE`, separate WebView profile cookies when supported, and dynamic `FLAG_SECURE` screenshot/recents blocking), plus edge swipe navigation.
-- **Media Studio (Sniffer, Media3 Player & Resumable Downloader)**: Detects direct MP4/WebM/HLS/DASH streams in WebView pages, supports Media3 playback with Picture-in-Picture, downloads files with HTTP `Range` resume support, decodes `data:` URLs, and remuxes adaptive streams locally.
+- **Media Studio (Sniffer, Media3 Player & Multi-Stream WorkManager Downloader)**: Detects direct MP4/WebM/HLS/DASH streams in WebView pages, supports Media3 playback with Picture-in-Picture, accelerates large direct downloads across up to 8 parallel HTTP `Range` segments via a persistent `WorkManager` queue (with per-chunk `.segmeta` resume), decodes `data:` URLs, and remuxes adaptive streams locally.
 - **Built-in WireGuard, Proxy & DoH VPN**:
   - WireGuard VPN via Cloudflare WARP (experimental registration endpoint) or imported `.conf` profiles, with IPv6 `::/0` routing and browser-level drop detection Kill Switch.
   - Public HTTP/SOCKS5 relay scanner (DE & IN prioritized) and Private Auth proxy support, with plain-HTTP safety warnings over public relays.

@@ -18,3 +18,9 @@
 # Media3 / ExoPlayer
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
+
+# WorkManager background download queue
+-keep class com.example.media.MediaDownloadWorker { *; }
+-keep class * extends androidx.work.CoroutineWorker { *; }
+-keep class * extends androidx.work.Worker { *; }
+

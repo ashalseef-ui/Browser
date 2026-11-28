@@ -140,6 +140,12 @@ internal fun MediaHubDownloadsTab(
                 Text(
                   text =
                     when (status) {
+                      DownloadStatus.QUEUED ->
+                        if (dl.downloadedBytes > 0L) {
+                          "Queued to resume • ${formatBytes(dl.downloadedBytes)} saved"
+                        } else {
+                          "Queued in background • Waiting for network"
+                        }
                       DownloadStatus.DOWNLOADING ->
                         if (dl.totalBytes > 0) {
                           val pct = ((dl.downloadedBytes * 100) / dl.totalBytes).coerceIn(0, 100)
@@ -170,7 +176,7 @@ internal fun MediaHubDownloadsTab(
                     },
                 )
               }
-              if (status == DownloadStatus.DOWNLOADING) {
+              if (status == DownloadStatus.DOWNLOADING || status == DownloadStatus.QUEUED) {
                 IconButton(onClick = { onCancelDownload(dl.id) }) {
                   Icon(
                     imageVector = Icons.Default.Close,
@@ -287,8 +293,8 @@ internal fun MediaHubDownloadsTab(
               }
             }
 
-            if (status == DownloadStatus.DOWNLOADING) {
-              if (dl.totalBytes > 0) {
+            if (status == DownloadStatus.DOWNLOADING || status == DownloadStatus.QUEUED) {
+              if (dl.totalBytes > 0 && status == DownloadStatus.DOWNLOADING) {
                 LinearProgressIndicator(
                   progress = {
                     (dl.downloadedBytes.toFloat() / dl.totalBytes.toFloat()).coerceIn(0f, 1f)

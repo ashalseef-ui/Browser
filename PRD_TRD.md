@@ -51,7 +51,7 @@ Unlike bloated browsers or third-party wrapper tools, Volt Browser combines a lo
 #### FR-3: Media Studio (Sniffer, Player & Downloader)
 - **Passive & DOM Sniffing:** Detects direct video/audio URLs (`mp4`, `webm`, `mkv`, `mp3`, `m4a`, etc.), HLS playlists (`.m3u8`), DASH manifests (`.mpd`), and classic playlists (`.m3u`, `.pls`, `.xspf`).
 - **Playback:** Integrated Media3 ExoPlayer overlay with seek controls, fullscreen mode, background audio service (`VoltMediaService`), mini-player bar, and Android Picture-in-Picture.
-- **Downloading:** Downloads direct files (with HTTP `Range` `206 Partial Content` resume on interrupted transfers), decodes `data:` / `blob:` payloads, and converts/muxes adaptive HLS/DASH streams into `.mp4` via Media3 `Transformer`, reporting progress in-app and via system notifications.
+- **Downloading:** Executes HTTP/S and adaptive downloads through a persistent `WorkManager` queue (`dataSync` foreground service) with up to 8 concurrent HTTP `Range` streams (`SegmentedDownloader` + `.segmeta` chunk checkpoints) for large range-capable files, single-stream `206 Partial Content` resume fallback, `data:` payload decoding, and Media3 `Transformer` `.mp4` remuxing for HLS/DASH streams.
 - **Site Media Compatibility Bypass:** Per-site toggle in Privacy & Security controls for sites requiring relaxed compatibility handling.
 
 #### FR-4: Network & Tunnel (`WireGuard`, `Web Proxy`, `Encrypted DNS`)
@@ -89,7 +89,7 @@ Volt Browser follows a modular **MVVM** architecture with unidirectional `StateF
 | `com.example` | `VoltBrowserApp`, `MainActivity` | Application bootstrap, async Chromium warmup, edge-to-edge Activity host, `FLAG_SECURE` Private-tab protection, PiP & intent handling |
 | `com.example.browser` | `VoltSpeedEngine`, `WebViewTabPool`, `WebContextTargetResolver`, `SocialHubHelper`, `VoltDataSaver`, `MediaSniffer`, `MediaSnifferCoordinator`, `PlaylistResolver`, `DeviceTraceCleaner` | WebView lifecycle & LRU pooling, UA/cache/dark-web/per-site config, Data Saver interception, JS bridge & media sniffing, social autofill helpers, trace erasure |
 | `com.example.data` | `AppDatabase`, `BrowserDaos`, `RoomEntities`, `BrowserRepository`, `VoltPreferences`, `SecureConfigCipher`, `BrowserModels` | Room SQLite persistence (`v3`), Jetpack DataStore preferences, AES-256-GCM Keystore encryption, domain models |
-| `com.example.media` | `MediaPlaybackManager`, `VoltMediaService`, `MediaDownloader`, `DataUrlDecoder`, `MediaExportHelper` | Media3 ExoPlayer playback, `MediaSessionService` foreground service, resumable OkHttp + Media3 `Transformer` download pipeline, MediaStore/SAF export |
+| `com.example.media` | `MediaPlaybackManager`, `VoltMediaService`, `MediaDownloader`, `MediaDownloadWorker`, `SegmentedDownloader`, `AdaptiveStreamExporter`, `DataUrlDecoder`, `MediaExportHelper` | Media3 ExoPlayer playback, `MediaSessionService` foreground service, WorkManager download queue, 8-stream segmented HTTP Range downloader, Media3 `Transformer` export, MediaStore/SAF export |
 | `com.example.vpn` | `VpnProxyCoordinator`, `WireGuardManager`, `PublicRelayManager`, `VoltVpnService`, `VpnModels` | WireGuard `GoBackend` orchestration, Kill Switch enforcement, proxy relay discovery/probing, IPv4 DNS-to-DoH TUN codec |
 | `com.example.ui` | `BrowserViewModel`, `BrowserUiState`, `VoltBrowserScreen`, `BrowserNavigationRail`, `BrowserOverlays`, `ui/theme/*`, `ui/components/*`, `ui/screens/*` | Modular Jetpack Compose Material 3 UI, state orchestration, adaptive layouts, gesture & sheet overlays |
 
@@ -99,7 +99,7 @@ Volt Browser follows a modular **MVVM** architecture with unidirectional `StateF
 Configured via `gradle/libs.versions.toml` and `app/build.gradle.kts`:
 - **Build & Language:** AGP `9.1.1`, Kotlin `2.4.21`, KSP `2.3.5`, Java 17 bytecode with core library desugaring (`desugar_jdk_libs 2.1.5`).
 - **UI & Graphics:** Jetpack Compose BOM `2024.09.00`, Material 3, Material Icons Extended, Coil Compose `2.7.0`, local bundled fonts (`outfit.ttf`, `manrope.ttf`, `jetbrains_mono.ttf`).
-- **Web & Concurrency:** `androidx.webkit:webkit 1.15.0`, Kotlin Coroutines `1.10.2`, `OkHttp 4.10.0`.
+- **Web, Queueing & Concurrency:** `androidx.webkit:webkit 1.15.0`, `androidx.work:work-runtime-ktx 2.10.0`, Kotlin Coroutines `1.10.2`, `OkHttp 4.10.0`.
 - **Persistence & Security:** Room `2.7.0` (`runtime`, `ktx`, `compiler` via KSP), DataStore Preferences `1.1.7`, `AndroidKeyStore` AES-GCM (`javax.crypto`).
 - **Media:** `androidx.media3` `1.6.1` (`exoplayer`, `exoplayer-hls`, `exoplayer-dash`, `ui`, `session`, `common`, `datasource-okhttp`, `transformer`).
 - **VPN Tunneling:** `com.wireguard.android:tunnel 1.0.20260102` (`GoBackend`), Android `VpnService`.
@@ -158,10 +158,11 @@ Configured via `gradle/libs.versions.toml` and `app/build.gradle.kts`:
 
 #### 2.3.4 Media Playback & Download Pipeline (`media/`)
 - **Playback:** `MediaPlaybackManager` binds `ExoPlayer` configured with `OkHttpDataSource.Factory` (injecting per-stream `Referer`, `Origin`, and `User-Agent` from `MediaSniffer.registerPlaybackContext`), attaches to `VoltMediaService` (`foregroundServiceType="mediaPlayback"`), and updates Android 12+ `PictureInPictureParams.setAutoEnterEnabled` in `MainActivity`.
-- **Downloading (`MediaDownloader`):**
-  - Standard HTTP/S assets stream directly via `okHttpClient`, support HTTP `Range: bytes=<offset>-` `206 Partial Content` resume via `resumeOrRetryDownload`, and export via `MediaExportHelper` (`MediaStore` / SAF / `FileProvider`).
+- **Downloading (`MediaDownloader`, `MediaDownloadWorker`, `SegmentedDownloader`, `AdaptiveStreamExporter`):**
+  - HTTP/S downloads enqueue into `WorkManager` (`MediaDownloadWorker`, `NetworkType.CONNECTED`, `FOREGROUND_SERVICE_TYPE_DATA_SYNC`) for background survival and automatic backoff retries across interruptions.
+  - Range-capable files (`Accept-Ranges: bytes` / `206` probe, `>= 1 MB`) split across up to **8 parallel HTTP `Range` connections** writing disjoint offsets into `RandomAccessFile` with sibling `.segmeta` JSON checkpoints so interrupted chunks resume precisely without re-fetching completed segments; non-range servers fall back cleanly to single-stream `Range: bytes=<offset>-` transfers and export via `MediaExportHelper` (`MediaStore` / SAF / `FileProvider`).
   - `data:` URLs are base64/URL-decoded locally via `DataUrlDecoder`.
-  - Adaptive HLS/DASH streams are transformed/remuxed to `.mp4` locally using Media3 `Transformer` + `ExoPlayerAssetLoader` with live progress tracking.
+  - Adaptive HLS/DASH streams are transformed/remuxed to `.mp4` locally using `AdaptiveStreamExporter` (Media3 `Transformer` + `ExoPlayerAssetLoader`) with live progress tracking.
 
 #### 2.3.5 VPN, WireGuard, Proxy & DoH (`vpn/`)
 - **WireGuard (`WireGuardManager`):**

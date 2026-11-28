@@ -954,4 +954,206 @@ class ExampleRobolectricTest {
         db.close()
       }
     }
+
+  @Test
+  fun `segmented downloader splits byte ranges contiguously and transfers parallel chunks`() =
+    kotlinx.coroutines.runBlocking {
+      val segments = com.example.media.SegmentedDownloader.planSegments(totalBytes = 10_003L, maxSegments = 8)
+      assertEquals(8, segments.size)
+      assertEquals(0L, segments.first().startByte)
+      assertEquals(10_002L, segments.last().endByte)
+      assertEquals(10_003L, segments.sumOf { it.totalLength })
+      for (i in 1 until segments.size) {
+        assertEquals(segments[i - 1].endByte + 1L, segments[i].startByte)
+      }
+
+      val payload = ByteArray(128 * 1024) { idx -> ((idx * 31 + 7) and 0xFF).toByte() }
+      val rangeRequestsSeen = java.util.concurrent.atomic.AtomicInteger(0)
+      val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+      server.executor = java.util.concurrent.Executors.newFixedThreadPool(8)
+      server.createContext("/asset.bin") { exchange ->
+        when (exchange.requestMethod) {
+          "HEAD" -> {
+            exchange.responseHeaders.add("Accept-Ranges", "bytes")
+            exchange.responseHeaders.add("Content-Length", payload.size.toString())
+            exchange.responseHeaders.add("ETag", "\"v1-128k\"")
+            exchange.sendResponseHeaders(200, -1)
+            exchange.close()
+          }
+          "GET" -> {
+            val range = exchange.requestHeaders.getFirst("Range")
+            if (range != null && range.startsWith("bytes=")) {
+              rangeRequestsSeen.incrementAndGet()
+              val parts = range.removePrefix("bytes=").split("-")
+              val start = parts[0].toInt()
+              val end = parts.getOrNull(1)?.toIntOrNull() ?: (payload.size - 1)
+              val slice = payload.copyOfRange(start, end + 1)
+              exchange.responseHeaders.add("Content-Range", "bytes $start-$end/${payload.size}")
+              exchange.sendResponseHeaders(206, slice.size.toLong())
+              exchange.responseBody.use { it.write(slice) }
+            } else {
+              exchange.sendResponseHeaders(200, payload.size.toLong())
+              exchange.responseBody.use { it.write(payload) }
+            }
+          }
+        }
+      }
+      server.start()
+      val context = ApplicationProvider.getApplicationContext<Context>()
+      val outFile = File(context.cacheDir, "segmented_test_${System.nanoTime()}.bin")
+      try {
+        val url = "http://127.0.0.1:${server.address.port}/asset.bin"
+        val downloader =
+          com.example.media.SegmentedDownloader(
+            okHttpClient = okhttp3.OkHttpClient(),
+            maxSegments = 8,
+            minSegmentedBytes = 32 * 1024L,
+          )
+        val probe = downloader.probe(url, null)
+        assertNotNull(probe)
+        assertTrue(downloader.shouldUseSegmentedDownload(probe))
+
+        val ok =
+          downloader.download(
+            url = url,
+            referer = null,
+            targetFile = outFile,
+            probe = probe!!,
+            allowResume = false,
+          ) { _, _, _ -> }
+
+        assertTrue(ok)
+        assertEquals(8, rangeRequestsSeen.get())
+        assertTrue(outFile.readBytes().contentEquals(payload))
+        assertFalse(com.example.media.SegmentedDownloader.segMetaFileFor(outFile).exists())
+      } finally {
+        server.stop(0)
+        outFile.delete()
+        com.example.media.SegmentedDownloader.cleanupMetaFile(outFile)
+      }
+    }
+
+  @Test
+  fun `segmented downloader resumes only remaining chunks from segmeta checkpoint`() =
+    kotlinx.coroutines.runBlocking {
+      val payload = ByteArray(64 * 1024) { idx -> ((idx * 17 + 3) and 0xFF).toByte() }
+      val requestedRanges = java.util.Collections.synchronizedList(mutableListOf<String>())
+      val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+      server.executor = java.util.concurrent.Executors.newFixedThreadPool(4)
+      server.createContext("/resume.bin") { exchange ->
+        if (exchange.requestMethod == "HEAD") {
+          exchange.responseHeaders.add("Accept-Ranges", "bytes")
+          exchange.responseHeaders.add("Content-Length", payload.size.toString())
+          exchange.responseHeaders.add("ETag", "\"resume-64k\"")
+          exchange.sendResponseHeaders(200, -1)
+          exchange.close()
+        } else {
+          val range = exchange.requestHeaders.getFirst("Range").orEmpty()
+          requestedRanges.add(range)
+          val parts = range.removePrefix("bytes=").split("-")
+          val start = parts[0].toInt()
+          val end = parts[1].toInt()
+          val slice = payload.copyOfRange(start, end + 1)
+          exchange.responseHeaders.add("Content-Range", "bytes $start-$end/${payload.size}")
+          exchange.sendResponseHeaders(206, slice.size.toLong())
+          exchange.responseBody.use { it.write(slice) }
+        }
+      }
+      server.start()
+      val context = ApplicationProvider.getApplicationContext<Context>()
+      val outFile = File(context.cacheDir, "segmented_resume_${System.nanoTime()}.bin")
+      try {
+        val segments = com.example.media.SegmentedDownloader.planSegments(payload.size.toLong(), 4)
+        java.io.RandomAccessFile(outFile, "rw").use { raf ->
+          raf.setLength(payload.size.toLong())
+          // Pre-populate first 2 of 4 segments on disk
+          val firstHalfLen = (segments[1].endByte + 1L).toInt()
+          raf.seek(0L)
+          raf.write(payload, 0, firstHalfLen)
+        }
+        val metaJson =
+          org.json.JSONObject()
+            .put("totalBytes", payload.size.toLong())
+            .put("etag", "\"resume-64k\"")
+            .put("lastModified", "")
+            .put(
+              "segments",
+              org.json.JSONArray().apply {
+                segments.forEachIndexed { idx, seg ->
+                  put(
+                    org.json.JSONObject()
+                      .put("index", seg.index)
+                      .put("start", seg.startByte)
+                      .put("end", seg.endByte)
+                      .put("downloaded", if (idx < 2) seg.totalLength else 0L)
+                  )
+                }
+              },
+            )
+        com.example.media.SegmentedDownloader.segMetaFileFor(outFile).writeText(metaJson.toString())
+        assertEquals(
+          (segments[0].totalLength + segments[1].totalLength),
+          com.example.media.SegmentedDownloader.readSavedProgressBytes(outFile),
+        )
+
+        val url = "http://127.0.0.1:${server.address.port}/resume.bin"
+        val downloader =
+          com.example.media.SegmentedDownloader(
+            okHttpClient = okhttp3.OkHttpClient(),
+            maxSegments = 4,
+            minSegmentedBytes = 16 * 1024L,
+          )
+        val probe = downloader.probe(url, null)!!
+        val ok =
+          downloader.download(
+            url = url,
+            referer = null,
+            targetFile = outFile,
+            probe = probe,
+            allowResume = true,
+          ) { _, _, _ -> }
+
+        assertTrue(ok)
+        assertEquals(2, requestedRanges.size)
+        assertTrue(outFile.readBytes().contentEquals(payload))
+        assertFalse(com.example.media.SegmentedDownloader.segMetaFileFor(outFile).exists())
+      } finally {
+        server.stop(0)
+        outFile.delete()
+        com.example.media.SegmentedDownloader.cleanupMetaFile(outFile)
+      }
+    }
+
+  @Test
+  fun `media download worker enqueues unique constrained background work`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val wmConfig = androidx.work.Configuration.Builder().build()
+    androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(context, wmConfig)
+
+    val enqueued =
+      com.example.media.MediaDownloadWorker.enqueueOrFallback(
+        context = context,
+        downloadId = 42L,
+        url = "https://cdn.example.com/big-video.mp4",
+        targetPath = File(context.filesDir, "big-video.mp4").absolutePath,
+        mimeType = "video/mp4",
+        isAdaptive = false,
+        isHls = false,
+        hadExplicitName = true,
+        referer = "https://example.com",
+        resumePartial = false,
+      )
+    assertTrue(enqueued)
+
+    val infos =
+      androidx.work.WorkManager.getInstance(context)
+        .getWorkInfosForUniqueWork(com.example.media.MediaDownloadWorker.uniqueWorkName(42L))
+        .get()
+    assertEquals(1, infos.size)
+    assertTrue(infos.first().tags.contains(com.example.media.MediaDownloadWorker.WORK_TAG))
+    assertEquals(
+      androidx.work.NetworkType.CONNECTED,
+      infos.first().constraints.requiredNetworkType,
+    )
+  }
 }

@@ -1207,7 +1207,11 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
   fun deleteDownload(item: DownloadItemEntity) {
     mediaDownloader.cancelDownload(item.id)
     viewModelScope.launch {
-      runCatching { File(item.localPath).delete() }
+      runCatching {
+        val file = File(item.localPath)
+        file.delete()
+        File(file.parentFile, "${file.name}.segmeta").delete()
+      }
       repository.deleteDownload(item.id)
     }
   }

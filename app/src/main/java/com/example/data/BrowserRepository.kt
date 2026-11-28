@@ -61,6 +61,8 @@ class BrowserRepository(
 
   suspend fun insertDownload(item: DownloadItemEntity): Long = downloadDao.insert(item)
 
+  suspend fun getDownloadById(id: Long): DownloadItemEntity? = downloadDao.getById(id)
+
   suspend fun updateDownloadProgress(
     id: Long,
     downloaded: Long,
