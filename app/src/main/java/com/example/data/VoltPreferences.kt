@@ -17,13 +17,12 @@ private val Context.voltDataStore by preferencesDataStore(name = "volt_browser_p
 class VoltPreferences(private val context: Context) {
 
   private object Keys {
+    val TURBO_SHIELD = booleanPreferencesKey("turbo_shield_enabled")
+    val AD_BLOCKER_TYPE = stringPreferencesKey("ad_blocker_type")
     val LITE_MODE = booleanPreferencesKey("lite_mode_enabled")
-    val HTTPS_ONLY = booleanPreferencesKey("https_only_enabled")
     val DARK_WEB = booleanPreferencesKey("dark_web_enabled")
     val DESKTOP_MODE = booleanPreferencesKey("desktop_mode_enabled")
     val AUTO_WIREGUARD_ON_LAUNCH = booleanPreferencesKey("auto_wireguard_on_launch")
-    val WG_KILL_SWITCH = booleanPreferencesKey("wg_kill_switch_enabled")
-    val PUBLIC_PROXY_WARNED = booleanPreferencesKey("public_proxy_warned")
     val PREFERRED_WG_MODE = stringPreferencesKey("preferred_wg_mode")
     val SAVED_WARP_CONF = stringPreferencesKey("saved_warp_conf")
     val SAVED_CUSTOM_WG_CONF = stringPreferencesKey("saved_custom_wg_conf")
@@ -55,28 +54,25 @@ class VoltPreferences(private val context: Context) {
       val wgModeName = prefs[Keys.PREFERRED_WG_MODE] ?: WireGuardMode.WARP_FREE.name
       val wgMode =
         WireGuardMode.entries.firstOrNull { it.name == wgModeName } ?: WireGuardMode.WARP_FREE
-      val rawWarp = prefs[Keys.SAVED_WARP_CONF].orEmpty()
-      val decryptedWarp = SecureConfigCipher.decrypt(rawWarp)
-      val warpDecryptFailed = rawWarp.isNotBlank() && decryptedWarp == null
-
-      val rawCustomWg = prefs[Keys.SAVED_CUSTOM_WG_CONF].orEmpty()
-      val decryptedCustomWg = SecureConfigCipher.decrypt(rawCustomWg)
-      val customWgDecryptFailed = rawCustomWg.isNotBlank() && decryptedCustomWg == null
-
+      val legacyShield = prefs[Keys.TURBO_SHIELD] ?: false
+      val blockerName = prefs[Keys.AD_BLOCKER_TYPE]
+      val blockerType =
+        if (blockerName != null) {
+          AdBlockerType.entries.firstOrNull { it.name == blockerName } ?: AdBlockerType.OFF
+        } else {
+          if (legacyShield) AdBlockerType.ADGUARD else AdBlockerType.OFF
+        }
       BrowserSettings(
+        turboShieldEnabled = blockerType != AdBlockerType.OFF,
+        adBlockerType = blockerType,
         liteModeEnabled = prefs[Keys.LITE_MODE] ?: false,
-        httpsOnlyEnabled = prefs[Keys.HTTPS_ONLY] ?: false,
         darkWebEnabled = prefs[Keys.DARK_WEB] ?: true,
         desktopModeEnabled = prefs[Keys.DESKTOP_MODE] ?: false,
         autoWireGuardOnLaunchEnabled = prefs[Keys.AUTO_WIREGUARD_ON_LAUNCH] ?: false,
-        wireGuardKillSwitchEnabled = prefs[Keys.WG_KILL_SWITCH] ?: false,
-        hasSeenPublicProxyWarning = prefs[Keys.PUBLIC_PROXY_WARNED] ?: false,
         preferredWireGuardMode = wgMode,
-        savedWarpConf = decryptedWarp.orEmpty(),
-        savedCustomWgConf = decryptedCustomWg.orEmpty(),
+        savedWarpConf = SecureConfigCipher.decrypt(prefs[Keys.SAVED_WARP_CONF].orEmpty()),
+        savedCustomWgConf = SecureConfigCipher.decrypt(prefs[Keys.SAVED_CUSTOM_WG_CONF].orEmpty()),
         savedCustomWgName = prefs[Keys.SAVED_CUSTOM_WG_NAME].orEmpty(),
-        warpConfigDecryptFailed = warpDecryptFailed,
-        customWgConfigDecryptFailed = customWgDecryptFailed,
         autoProxyOnLaunchEnabled = prefs[Keys.AUTO_PROXY_ON_LAUNCH] ?: false,
         autoProxyFailoverEnabled = prefs[Keys.AUTO_PROXY_FAILOVER] ?: true,
         autoDnsVpnOnLaunchEnabled = prefs[Keys.AUTO_DNS_VPN_ON_LAUNCH] ?: false,
@@ -90,14 +86,19 @@ class VoltPreferences(private val context: Context) {
       )
     }
 
+  suspend fun setAdBlockerType(type: AdBlockerType) {
+    context.voltDataStore.edit {
+      it[Keys.AD_BLOCKER_TYPE] = type.name
+      it[Keys.TURBO_SHIELD] = type != AdBlockerType.OFF
+    }
+  }
 
+  suspend fun setTurboShield(enabled: Boolean) {
+    setAdBlockerType(if (enabled) AdBlockerType.ADGUARD else AdBlockerType.OFF)
+  }
 
   suspend fun setLiteMode(enabled: Boolean) {
     context.voltDataStore.edit { it[Keys.LITE_MODE] = enabled }
-  }
-
-  suspend fun setHttpsOnly(enabled: Boolean) {
-    context.voltDataStore.edit { it[Keys.HTTPS_ONLY] = enabled }
   }
 
   suspend fun setDarkWeb(enabled: Boolean) {
@@ -110,14 +111,6 @@ class VoltPreferences(private val context: Context) {
 
   suspend fun setAutoWireGuardOnLaunch(enabled: Boolean) {
     context.voltDataStore.edit { it[Keys.AUTO_WIREGUARD_ON_LAUNCH] = enabled }
-  }
-
-  suspend fun setWireGuardKillSwitch(enabled: Boolean) {
-    context.voltDataStore.edit { it[Keys.WG_KILL_SWITCH] = enabled }
-  }
-
-  suspend fun setPublicProxyWarned(warned: Boolean) {
-    context.voltDataStore.edit { it[Keys.PUBLIC_PROXY_WARNED] = warned }
   }
 
   suspend fun setPreferredWireGuardMode(mode: WireGuardMode) {

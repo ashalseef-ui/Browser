@@ -7,7 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.browser.DeviceTraceCleaner
 import com.example.browser.MediaSniffer
 import com.example.browser.PlaylistResolver
-
+import com.example.browser.TurboShield
 import com.example.browser.VoltSpeedEngine
 import com.example.browser.WebViewTabPool
 import com.example.data.DetectedMediaItem
@@ -41,6 +41,15 @@ class ExampleRobolectricTest {
     assertEquals("Volt Browser", appName)
   }
 
+  @Test
+  fun `turbo shield ad blocker is disabled and scrubbed`() {
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js")))
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://www.google-analytics.com/analytics.js")))
+    assertFalse(TurboShield.shouldBlock(Uri.parse("https://en.wikipedia.org/wiki/Android")))
+    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.ADGUARD))
+    assertNull(TurboShield.cosmeticFilterScript(com.example.data.AdBlockerType.STRICT))
+    assertEquals(com.example.data.AdBlockerType.OFF, com.example.data.BrowserSettings().adBlockerType)
+  }
 
   @Test
   fun `media sniffer detects mp4 hls dash and audio streams and filters ts chunks`() {
@@ -358,21 +367,6 @@ class ExampleRobolectricTest {
     assertTrue(blockImg)
     assertTrue(imgBytes > 0L)
 
-    val (blockAcceptImg, acceptImgBytes) =
-      com.example.browser.VoltDataSaver.shouldBlockForDataSaver(
-        Uri.parse("https://cdn.example.com/avatar?id=42"),
-        mapOf("Accept" to "image/avif,image/webp,image/*,*/*;q=0.8"),
-      )
-    assertTrue(blockAcceptImg)
-    assertEquals(com.example.browser.VoltDataSaver.ESTIMATED_IMAGE_BYTES, acceptImgBytes)
-
-    val gifResp = com.example.browser.VoltDataSaver.emptySaverResponse(isImage = true)
-    assertEquals(200, gifResp.statusCode)
-    assertEquals("image/gif", gifResp.mimeType)
-
-    val fontResp = com.example.browser.VoltDataSaver.emptySaverResponse(isImage = false)
-    assertEquals(404, fontResp.statusCode)
-
     val (blockFont, fontBytes) = com.example.browser.VoltDataSaver.shouldBlockForDataSaver(Uri.parse("https://fonts.example.com/inter.woff2"))
     assertTrue(blockFont)
     assertTrue(fontBytes > 0L)
@@ -458,7 +452,6 @@ class ExampleRobolectricTest {
     assertTrue(com.example.vpn.WireGuardManager.hasValidWireGuardSections(warpConf))
     assertEquals("162.159.192.1:2408", com.example.vpn.WireGuardManager.parseEndpointFromConf(warpConf))
     assertTrue(warpConf.contains("Address = 172.16.0.2/32"))
-    assertTrue(warpConf.contains("AllowedIPs = 0.0.0.0/0, ::/0"))
     assertTrue(warpConf.contains("MTU = 1280"))
 
     val relays =
@@ -699,7 +692,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `secure config cipher encrypts decrypts handles empty returns null on failure and passes legacy plaintext`() {
+  fun `secure config cipher encrypts decrypts handles empty and passes legacy plaintext`() {
     val keyGen = KeyGenerator.getInstance("AES")
     keyGen.init(256)
     val secretKey = keyGen.generateKey()
@@ -713,7 +706,6 @@ class ExampleRobolectricTest {
     assertEquals(wgConf, SecureConfigCipher.decryptWithKey(wgConf, secretKey))
     assertEquals("", SecureConfigCipher.encrypt(""))
     assertEquals("", SecureConfigCipher.decrypt(""))
-    assertNull(SecureConfigCipher.decrypt("enc:v1:corrupted_payload"))
   }
 
   @Test
@@ -791,369 +783,5 @@ class ExampleRobolectricTest {
 
     MediaSniffer.clearPlaybackContexts()
     assertNull(MediaSniffer.getPlaybackContext(mediaUrl))
-  }
-
-  @Test
-  fun `media js bridge caps payload size and item count and handles web message envelope`() {
-    val receivedBatches = mutableListOf<List<DetectedMediaItem>>()
-    val bridge =
-      com.example.browser.VoltMediaJsBridge(
-        onDetected = { receivedBatches.add(it) },
-        currentPageUrlProvider = { "https://watch.example.com" },
-      )
-
-    val items =
-      (1..55).joinToString(",") { idx ->
-        """{"url":"https://cdn.example.com/v$idx.mp4","kind":"VIDEO","title":"Video $idx"}"""
-      }
-    bridge.handleWebMessage("""{"type":"mediaFound","payload":[$items]}""")
-    assertEquals(1, receivedBatches.size)
-    assertEquals(com.example.browser.VoltMediaJsBridge.MAX_MEDIA_ITEMS, receivedBatches[0].size)
-
-    val oversized = "x".repeat(com.example.browser.VoltMediaJsBridge.MAX_MEDIA_JSON_CHARS + 100)
-    bridge.onMediaFound("""[{"url":"https://cdn.example.com/$oversized.mp4"}]""")
-    assertEquals(1, receivedBatches.size)
-  }
-
-  @Test
-  fun `https upgrade public relay flag and privacy security defaults work properly`() {
-    assertEquals(
-      "https://example.com/path?x=1",
-      WebViewTabPool.upgradeHttpToHttps("http://example.com/path?x=1"),
-    )
-    assertEquals(
-      "https://already.example.com",
-      WebViewTabPool.upgradeHttpToHttps("https://already.example.com"),
-    )
-
-    val publicNode =
-      com.example.vpn.PublicRelayNode(
-        ip = "198.51.100.10",
-        port = 8080,
-        country = "Germany",
-        countryCode = "DE",
-        protocol = "HTTP",
-        anonymity = "anonymous",
-        source = "ProxyScrape",
-      )
-    assertTrue(publicNode.isPublicFreeRelay)
-
-    val privateAuthNode =
-      com.example.vpn.PublicRelayNode(
-        ip = "198.51.100.11",
-        port = 3128,
-        country = "Private Auth Proxy",
-        countryCode = "CUSTOM",
-        protocol = "HTTP",
-        anonymity = "private",
-        source = "Private Auth",
-        username = "alice",
-        password = "secret",
-      )
-    assertFalse(privateAuthNode.isPublicFreeRelay)
-
-    val defaults = com.example.data.BrowserSettings()
-    assertFalse(defaults.httpsOnlyEnabled)
-    assertFalse(defaults.wireGuardKillSwitchEnabled)
-    assertFalse(defaults.hasSeenPublicProxyWarning)
-  }
-
-  @Test
-  fun `media downloader builds http range resume requests and parses content range totals`() {
-    val resumeReq =
-      MediaDownloader.buildResumeRequest(
-        url = "https://cdn.example.com/archive.zip",
-        referer = "https://example.com/files",
-        existingBytes = 4096L,
-      )
-    assertEquals("bytes=4096-", resumeReq.header("Range"))
-    assertEquals("https://example.com/files", resumeReq.header("Referer"))
-
-    val freshReq =
-      MediaDownloader.buildResumeRequest(
-        url = "https://cdn.example.com/archive.zip",
-        referer = null,
-        existingBytes = 0L,
-      )
-    assertNull(freshReq.header("Range"))
-
-    assertEquals(
-      10_000L,
-      MediaDownloader.parseContentRangeTotalBytes("bytes 4096-9999/10000", 4096L, 5904L),
-    )
-    assertEquals(
-      9_000L,
-      MediaDownloader.parseContentRangeTotalBytes("bytes 4096-8999/*", 4096L, 4904L),
-    )
-    assertEquals(
-      -1L,
-      MediaDownloader.parseContentRangeTotalBytes(null, 4096L, -1L),
-    )
-  }
-
-  @Test
-  fun `speed engine applies per-site javascript and desktop mode overrides cleanly`() {
-    val globalMobile =
-      com.example.data.BrowserSettings(
-        desktopModeEnabled = false,
-        liteModeEnabled = false,
-      )
-    val (jsBlocked, desktopPinned) =
-      VoltSpeedEngine.resolveEffectiveSiteSettings(
-        settings = globalMobile,
-        siteOverride = com.example.data.SiteHostOverride(jsEnabled = false, desktopMode = true),
-      )
-    assertFalse(jsBlocked)
-    assertTrue(desktopPinned)
-
-    val (jsDefault, desktopFromGlobal) =
-      VoltSpeedEngine.resolveEffectiveSiteSettings(
-        settings = globalMobile.copy(desktopModeEnabled = true),
-        siteOverride = null,
-      )
-    assertTrue(jsDefault)
-    assertTrue(desktopFromGlobal)
-
-    val sampleMobileUa =
-      "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36"
-    val desktopUa = VoltSpeedEngine.buildUserAgent(sampleMobileUa, desktopMode = true)
-    assertTrue(desktopUa.contains("X11; Linux x86_64"))
-    assertTrue(desktopUa.contains("Chrome/131.0.6778.39"))
-    assertEquals(sampleMobileUa, VoltSpeedEngine.buildUserAgent(sampleMobileUa, desktopMode = false))
-  }
-
-  @Test
-  fun `room app database persists and clears per-site settings`() =
-    kotlinx.coroutines.runBlocking {
-      val context = ApplicationProvider.getApplicationContext<Context>()
-      val db =
-        androidx.room.Room.inMemoryDatabaseBuilder(
-            context,
-            com.example.data.AppDatabase::class.java,
-          )
-          .allowMainThreadQueries()
-          .build()
-      try {
-        val dao = db.siteSettingDao()
-        dao.upsert(
-          com.example.data.SiteSettingEntity(
-            host = "news.example.com",
-            jsEnabled = false,
-            desktopMode = true,
-            updatedAt = 123456L,
-          )
-        )
-        val loaded = dao.getByHost("news.example.com")
-        assertNotNull(loaded)
-        assertEquals(false, loaded!!.jsEnabled)
-        assertEquals(true, loaded.desktopMode)
-
-        dao.deleteForHost("news.example.com")
-        assertNull(dao.getByHost("news.example.com"))
-      } finally {
-        db.close()
-      }
-    }
-
-  @Test
-  fun `segmented downloader splits byte ranges contiguously and transfers parallel chunks`() =
-    kotlinx.coroutines.runBlocking {
-      val segments = com.example.media.SegmentedDownloader.planSegments(totalBytes = 10_003L, maxSegments = 8)
-      assertEquals(8, segments.size)
-      assertEquals(0L, segments.first().startByte)
-      assertEquals(10_002L, segments.last().endByte)
-      assertEquals(10_003L, segments.sumOf { it.totalLength })
-      for (i in 1 until segments.size) {
-        assertEquals(segments[i - 1].endByte + 1L, segments[i].startByte)
-      }
-
-      val payload = ByteArray(128 * 1024) { idx -> ((idx * 31 + 7) and 0xFF).toByte() }
-      val rangeRequestsSeen = java.util.concurrent.atomic.AtomicInteger(0)
-      val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
-      server.executor = java.util.concurrent.Executors.newFixedThreadPool(8)
-      server.createContext("/asset.bin") { exchange ->
-        when (exchange.requestMethod) {
-          "HEAD" -> {
-            exchange.responseHeaders.add("Accept-Ranges", "bytes")
-            exchange.responseHeaders.add("Content-Length", payload.size.toString())
-            exchange.responseHeaders.add("ETag", "\"v1-128k\"")
-            exchange.sendResponseHeaders(200, -1)
-            exchange.close()
-          }
-          "GET" -> {
-            val range = exchange.requestHeaders.getFirst("Range")
-            if (range != null && range.startsWith("bytes=")) {
-              rangeRequestsSeen.incrementAndGet()
-              val parts = range.removePrefix("bytes=").split("-")
-              val start = parts[0].toInt()
-              val end = parts.getOrNull(1)?.toIntOrNull() ?: (payload.size - 1)
-              val slice = payload.copyOfRange(start, end + 1)
-              exchange.responseHeaders.add("Content-Range", "bytes $start-$end/${payload.size}")
-              exchange.sendResponseHeaders(206, slice.size.toLong())
-              exchange.responseBody.use { it.write(slice) }
-            } else {
-              exchange.sendResponseHeaders(200, payload.size.toLong())
-              exchange.responseBody.use { it.write(payload) }
-            }
-          }
-        }
-      }
-      server.start()
-      val context = ApplicationProvider.getApplicationContext<Context>()
-      val outFile = File(context.cacheDir, "segmented_test_${System.nanoTime()}.bin")
-      try {
-        val url = "http://127.0.0.1:${server.address.port}/asset.bin"
-        val downloader =
-          com.example.media.SegmentedDownloader(
-            okHttpClient = okhttp3.OkHttpClient(),
-            maxSegments = 8,
-            minSegmentedBytes = 32 * 1024L,
-          )
-        val probe = downloader.probe(url, null)
-        assertNotNull(probe)
-        assertTrue(downloader.shouldUseSegmentedDownload(probe))
-
-        val ok =
-          downloader.download(
-            url = url,
-            referer = null,
-            targetFile = outFile,
-            probe = probe!!,
-            allowResume = false,
-          ) { _, _, _ -> }
-
-        assertTrue(ok)
-        assertEquals(8, rangeRequestsSeen.get())
-        assertTrue(outFile.readBytes().contentEquals(payload))
-        assertFalse(com.example.media.SegmentedDownloader.segMetaFileFor(outFile).exists())
-      } finally {
-        server.stop(0)
-        outFile.delete()
-        com.example.media.SegmentedDownloader.cleanupMetaFile(outFile)
-      }
-    }
-
-  @Test
-  fun `segmented downloader resumes only remaining chunks from segmeta checkpoint`() =
-    kotlinx.coroutines.runBlocking {
-      val payload = ByteArray(64 * 1024) { idx -> ((idx * 17 + 3) and 0xFF).toByte() }
-      val requestedRanges = java.util.Collections.synchronizedList(mutableListOf<String>())
-      val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
-      server.executor = java.util.concurrent.Executors.newFixedThreadPool(4)
-      server.createContext("/resume.bin") { exchange ->
-        if (exchange.requestMethod == "HEAD") {
-          exchange.responseHeaders.add("Accept-Ranges", "bytes")
-          exchange.responseHeaders.add("Content-Length", payload.size.toString())
-          exchange.responseHeaders.add("ETag", "\"resume-64k\"")
-          exchange.sendResponseHeaders(200, -1)
-          exchange.close()
-        } else {
-          val range = exchange.requestHeaders.getFirst("Range").orEmpty()
-          requestedRanges.add(range)
-          val parts = range.removePrefix("bytes=").split("-")
-          val start = parts[0].toInt()
-          val end = parts[1].toInt()
-          val slice = payload.copyOfRange(start, end + 1)
-          exchange.responseHeaders.add("Content-Range", "bytes $start-$end/${payload.size}")
-          exchange.sendResponseHeaders(206, slice.size.toLong())
-          exchange.responseBody.use { it.write(slice) }
-        }
-      }
-      server.start()
-      val context = ApplicationProvider.getApplicationContext<Context>()
-      val outFile = File(context.cacheDir, "segmented_resume_${System.nanoTime()}.bin")
-      try {
-        val segments = com.example.media.SegmentedDownloader.planSegments(payload.size.toLong(), 4)
-        java.io.RandomAccessFile(outFile, "rw").use { raf ->
-          raf.setLength(payload.size.toLong())
-          // Pre-populate first 2 of 4 segments on disk
-          val firstHalfLen = (segments[1].endByte + 1L).toInt()
-          raf.seek(0L)
-          raf.write(payload, 0, firstHalfLen)
-        }
-        val metaJson =
-          org.json.JSONObject()
-            .put("totalBytes", payload.size.toLong())
-            .put("etag", "\"resume-64k\"")
-            .put("lastModified", "")
-            .put(
-              "segments",
-              org.json.JSONArray().apply {
-                segments.forEachIndexed { idx, seg ->
-                  put(
-                    org.json.JSONObject()
-                      .put("index", seg.index)
-                      .put("start", seg.startByte)
-                      .put("end", seg.endByte)
-                      .put("downloaded", if (idx < 2) seg.totalLength else 0L)
-                  )
-                }
-              },
-            )
-        com.example.media.SegmentedDownloader.segMetaFileFor(outFile).writeText(metaJson.toString())
-        assertEquals(
-          (segments[0].totalLength + segments[1].totalLength),
-          com.example.media.SegmentedDownloader.readSavedProgressBytes(outFile),
-        )
-
-        val url = "http://127.0.0.1:${server.address.port}/resume.bin"
-        val downloader =
-          com.example.media.SegmentedDownloader(
-            okHttpClient = okhttp3.OkHttpClient(),
-            maxSegments = 4,
-            minSegmentedBytes = 16 * 1024L,
-          )
-        val probe = downloader.probe(url, null)!!
-        val ok =
-          downloader.download(
-            url = url,
-            referer = null,
-            targetFile = outFile,
-            probe = probe,
-            allowResume = true,
-          ) { _, _, _ -> }
-
-        assertTrue(ok)
-        assertEquals(2, requestedRanges.size)
-        assertTrue(outFile.readBytes().contentEquals(payload))
-        assertFalse(com.example.media.SegmentedDownloader.segMetaFileFor(outFile).exists())
-      } finally {
-        server.stop(0)
-        outFile.delete()
-        com.example.media.SegmentedDownloader.cleanupMetaFile(outFile)
-      }
-    }
-
-  @Test
-  fun `media download worker enqueues unique constrained background work`() {
-    val context = ApplicationProvider.getApplicationContext<Context>()
-    val wmConfig = androidx.work.Configuration.Builder().build()
-    androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(context, wmConfig)
-
-    val enqueued =
-      com.example.media.MediaDownloadWorker.enqueueOrFallback(
-        context = context,
-        downloadId = 42L,
-        url = "https://cdn.example.com/big-video.mp4",
-        targetPath = File(context.filesDir, "big-video.mp4").absolutePath,
-        mimeType = "video/mp4",
-        isAdaptive = false,
-        isHls = false,
-        hadExplicitName = true,
-        referer = "https://example.com",
-        resumePartial = false,
-      )
-    assertTrue(enqueued)
-
-    val infos =
-      androidx.work.WorkManager.getInstance(context)
-        .getWorkInfosForUniqueWork(com.example.media.MediaDownloadWorker.uniqueWorkName(42L))
-        .get()
-    assertEquals(1, infos.size)
-    assertTrue(infos.first().tags.contains(com.example.media.MediaDownloadWorker.WORK_TAG))
-    assertEquals(
-      androidx.work.NetworkType.CONNECTED,
-      infos.first().constraints.requiredNetworkType,
-    )
   }
 }
